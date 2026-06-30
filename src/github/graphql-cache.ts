@@ -32,6 +32,16 @@ export function isCacheableGraphQlQuery(query: string): boolean {
   return graphqlCacheClassForQuery(query) !== null;
 }
 
+/** GitHub GraphQL returns HTTP 200 for many failure modes; only cache bodies without a non-empty `errors` array. */
+export function isCacheableGraphQlResponseBody(body: string): boolean {
+  try {
+    const payload = JSON.parse(body) as { errors?: unknown };
+    return !Array.isArray(payload.errors) || payload.errors.length === 0;
+  } catch {
+    return false;
+  }
+}
+
 function positiveEnvSeconds(env: Record<string, string | undefined>, name: string, fallback: number): number {
   const raw = env[name];
   if (raw === undefined || raw.trim() === "") return fallback;
@@ -98,9 +108,11 @@ async function fetchAndMaybeCacheGraphQl(
   const response = await fetchGraphQlWithRetry(query, token);
   if (response.status !== 200) return { response, cached: null };
   try {
+    const body = await response.clone().text();
+    if (!isCacheableGraphQlResponseBody(body)) return { response, cached: null };
     const cached = {
       status: 200,
-      body: await response.clone().text(),
+      body,
       contentType: response.headers.get("content-type") ?? "application/json",
     };
     await getGitHubResponseCache()!.set(cacheKey, cached, githubGraphQlCacheTtlSeconds(cls));
@@ -131,7 +143,7 @@ export async function fetchCachedGitHubGraphQl(query: string, token: string): Pr
   } catch {
     recordGraphQlCacheMetric("error", cls);
   }
-  if (hit?.status === 200) {
+  if (hit?.status === 200 && isCacheableGraphQlResponseBody(hit.body)) {
     recordGraphQlCacheMetric("hit", cls);
     return responseFromCached(hit, "hit");
   }

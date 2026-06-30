@@ -6,6 +6,7 @@ import {
   graphqlCacheClassForQuery,
   graphqlOperationName,
   isCacheableGraphQlQuery,
+  isCacheableGraphQlResponseBody,
 } from "../../src/github/graphql-cache";
 import {
   clearGitHubResponseCacheForTest,
@@ -71,6 +72,13 @@ describe("graphql cache allowlist", () => {
     expect(isCacheableGraphQlQuery(MUTABLE_QUERY)).toBe(false);
     expect(isCacheableGraphQlQuery(ANONYMOUS_QUERY)).toBe(false);
     expect(graphqlOperationName(" mutation X { }")).toBeNull();
+  });
+
+  it("rejects GraphQL error envelopes and malformed bodies for caching", () => {
+    expect(isCacheableGraphQlResponseBody(JSON.stringify({ data: { repository: null } }))).toBe(true);
+    expect(isCacheableGraphQlResponseBody(JSON.stringify({ errors: [{ message: "rate limit" }] }))).toBe(false);
+    expect(isCacheableGraphQlResponseBody(JSON.stringify({ errors: [] }))).toBe(true);
+    expect(isCacheableGraphQlResponseBody("not-json")).toBe(false);
   });
 
   it("honors GITHUB_GRAPHQL_CACHE_TTL_SECONDS with a positive fallback", () => {
@@ -172,6 +180,42 @@ describe("fetchCachedGitHubGraphQl", () => {
     const response = await fetchCachedGitHubGraphQl(TOTALS_QUERY, "token-a");
     expect(response.status).toBe(500);
     expect(store.size).toBe(0);
+  });
+
+  it("does not cache HTTP 200 GraphQL responses that carry an errors envelope", async () => {
+    const store = installMemoryResponseCache();
+    let fetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      fetches += 1;
+      return Response.json({ errors: [{ message: "Something went wrong" }] });
+    });
+
+    await fetchCachedGitHubGraphQl(TOTALS_QUERY, "token-a");
+    await fetchCachedGitHubGraphQl(TOTALS_QUERY, "token-a");
+
+    expect(fetches).toBe(2);
+    expect(store.size).toBe(0);
+    expect(await renderMetrics()).not.toContain('gittensory_github_graphql_cache_total{class="repo_totals",result="set"}');
+  });
+
+  it("treats cached GraphQL error envelopes as a miss on replay", async () => {
+    setGitHubResponseCache({
+      get: async () => ({
+        status: 200,
+        body: JSON.stringify({ errors: [{ message: "stale cached failure" }] }),
+        contentType: "application/json",
+      }),
+      set: async () => undefined,
+    });
+    let fetches = 0;
+    vi.stubGlobal("fetch", async () => {
+      fetches += 1;
+      return Response.json({ data: { repository: { issues: { totalCount: 3 } } } });
+    });
+
+    const response = await fetchCachedGitHubGraphQl(TOTALS_QUERY, "token-a");
+    expect(await response.json()).toMatchObject({ data: { repository: { issues: { totalCount: 3 } } } });
+    expect(fetches).toBe(1);
   });
 
   it("fail-opens on cache write errors after a successful upstream fetch", async () => {

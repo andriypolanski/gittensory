@@ -46,6 +46,7 @@ export {
   graphqlCacheClassForQuery,
   graphqlOperationName,
   isCacheableGraphQlQuery,
+  isCacheableGraphQlResponseBody,
 } from "./graphql-cache";
 
 type CheckRunResponse = {
