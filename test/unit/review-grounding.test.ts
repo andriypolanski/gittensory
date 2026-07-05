@@ -152,16 +152,36 @@ describe("review-grounding: fetchFullFileContents (injected FileFetcher, fail-sa
   });
 
   it("inlines readable files, skips removed/binary, orders source first", async () => {
-    const fetcher = fetcherFrom({ "src/a.ts": "export const a = 1;", "README.md": "# docs" });
+    const reads: string[] = [];
+    const fetcher: FileFetcher = {
+      getFileContent: async (path) => {
+        reads.push(path);
+        if (path === "src/a.ts") return "export const a = 1;";
+        if (path === "README.md") return "# docs";
+        return "SHOULD_NOT_FETCH";
+      },
+    };
+    const binary = ["logo.png", "assets/photo.avif", "assets/poster.bmp", "assets/icon.heic", "dist/pkg.tgz"];
     const out = await fetchFullFileContents(
       { ciGrounding: false, fullFileContext: true },
       "sha",
-      files(["README.md"], ["src/a.ts"], ["logo.png"], ["old.ts", "removed"]),
+      files(
+        ["README.md"],
+        ["src/a.ts"],
+        ["logo.png"],
+        ["assets/photo.avif"],
+        ["assets/poster.bmp"],
+        ["assets/icon.heic"],
+        ["dist/pkg.tgz"],
+        ["old.ts", "removed"],
+      ),
       fetcher,
     );
     expect(out).toBeDefined();
-    // source (priority 0) before docs (priority 2); png + removed excluded
+    // source (priority 0) before docs (priority 2); binary + removed excluded before fetch
     expect(out?.map((f) => f.path)).toEqual(["src/a.ts", "README.md"]);
+    expect(reads).toEqual(["src/a.ts", "README.md"]);
+    for (const path of binary) expect(reads).not.toContain(path);
   });
 
   it("degrades to skipping a file when the fetcher throws (never throws itself)", async () => {
