@@ -947,6 +947,32 @@
         "network": "Pure local analyzer. No external network call.",
         "notes": "Precision-first: only UPPERCASE, comment-anchored markers are reported (a lowercase `todo` identifier or a marker inside a string literal is never flagged); a bare marker inside a multi-line block comment is intentionally not matched."
       }
+    },
+    {
+      "name": "magicNumber",
+      "title": "Magic numbers",
+      "category": "quality",
+      "cost": "local",
+      "defaultEnabled": true,
+      "profiles": [
+        "fast",
+        "balanced",
+        "deep"
+      ],
+      "requires": [
+        "files"
+      ],
+      "limits": {
+        "maxFindings": 25,
+        "maxLineChars": 2000
+      },
+      "docs": {
+        "summary": "Flags newly-added non-trivial numeric literals in non-test source where a named constant would clarify intent.",
+        "looksAt": "Added lines in source files, excluding tests, strings, comments, trivial sentinels/scales, named constants, array indexes, and enum-like initializers.",
+        "reports": "File, line, and numeric literal text only.",
+        "network": "Pure local analyzer. No external network call.",
+        "notes": "Precision-first: common values such as 0, 1, -1, 2, 100, 1000, and powers of ten are silent."
+      }
     }
   ]
 }

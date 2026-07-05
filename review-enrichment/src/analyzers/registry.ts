@@ -27,6 +27,7 @@ import { scanStaleBranch } from "./stale-branch.js";
 import { scanTestRatio } from "./test-ratio.js";
 import { scanMigrationSafety } from "./migration-safety.js";
 import { scanLooseRanges } from "./loose-range.js";
+import { scanMagicNumbers } from "./magic-number.js";
 import { scanTerminology } from "./terminology.js";
 import { scanTodoMarker } from "./todo-marker.js";
 import { scanTyposquat } from "./typosquat.js";
@@ -854,6 +855,36 @@ export const ANALYZER_DESCRIPTORS = [
       return lines;
     },
     run: (req, { signal }) => scanTodoMarker(req, signal),
+  }),
+  descriptor({
+    name: "magicNumber",
+    title: "Magic numbers",
+    category: "quality",
+    cost: "local",
+    defaultEnabled: true,
+    requires: ["files"],
+    limits: { maxFindings: 25, maxLineChars: 2000 },
+    docs: {
+      summary:
+        "Flags newly-added non-trivial numeric literals in non-test source where a named constant would clarify intent.",
+      looksAt:
+        "Added lines in source files, excluding tests, strings, comments, trivial sentinels/scales, named constants, array indexes, and enum-like initializers.",
+      reports: "File, line, and numeric literal text only.",
+      network: "Pure local analyzer. No external network call.",
+      notes:
+        "Precision-first: common values such as 0, 1, -1, 2, 100, 1000, and powers of ten are silent.",
+    },
+    render: (findings, helpers) => {
+      if (!findings.length) return [];
+      const lines = ["### Magic numbers (new unexplained numeric literals)"];
+      for (const item of findings) {
+        lines.push(
+          `- ${helpers.safeCodeSpan(`${item.file}:${item.line}`)} adds ${helpers.safeCodeSpan(item.value)}; consider naming the intent with a constant`,
+        );
+      }
+      return lines;
+    },
+    run: (req, { signal }) => scanMagicNumbers(req, signal),
   }),
 ] as const satisfies readonly AnyAnalyzerDescriptor[];
 

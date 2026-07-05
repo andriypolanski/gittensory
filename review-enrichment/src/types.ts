@@ -438,6 +438,15 @@ export interface TodoMarkerFinding {
   note?: string;
 }
 
+/** An unexplained numeric literal newly added in non-test source where a named constant would usually make intent
+ *  clearer (#2018, part of #1499). Precision-first: common sentinels/scales, named constants, array indexes, and
+ *  enum/member initializers are suppressed. Reports only the location and literal text. */
+export interface MagicNumberFinding {
+  file: string;
+  line: number;
+  value: string;
+}
+
 /** Structured analyzer output. Each analyzer fills its own key; more land as analyzers ship (#1477/#1478). */
 export interface BriefFindings {
   dependency?: DependencyFinding[];
@@ -473,6 +482,7 @@ export interface BriefFindings {
   looseRange?: LooseRangeFinding[];
   terminology?: TerminologyFinding[];
   todoMarker?: TodoMarkerFinding[];
+  magicNumber?: MagicNumberFinding[];
 }
 
 /** A JSDoc/TSDoc block whose `@param` tags name parameters the adjacent function no longer declares — a
