@@ -9,6 +9,7 @@ import {
   parseAgentCommandFeedbackContext,
   parseGittensoryMentionCommand,
   sanitizePublicComment,
+  suggestCommand,
   githubCommandsInternals,
 } from "../../src/github/commands";
 
@@ -21,6 +22,7 @@ describe("GitHub mention commands", () => {
       name: "ask",
       question: "what should I fix first?",
     });
+    expect(parseGittensoryMentionCommand("@gittensory ask")).toMatchObject({ name: "ask", question: undefined });
     expect(parseGittensoryMentionCommand("@gittensory preflight")?.name).toBe("preflight");
     expect(parseGittensoryMentionCommand("please @gittensory duplicate-check now")?.name).toBe("duplicate-check");
     expect(parseGittensoryMentionCommand("@gittensory reviewability")?.name).toBe("reviewability");
@@ -31,7 +33,7 @@ describe("GitHub mention commands", () => {
     expect(parseGittensoryMentionCommand("@gittensory review-now")?.name).toBe("review-now");
     expect(parseGittensoryMentionCommand("@gittensory needs-author")?.name).toBe("needs-author");
     expect(parseGittensoryMentionCommand("@gittensory duplicate-clusters")?.name).toBe("duplicate-clusters");
-    expect(parseGittensoryMentionCommand("@gittensory unknown")?.name).toBe("help");
+    expect(parseGittensoryMentionCommand("@gittensory unknown")).toMatchObject({ name: "help", unknownVerb: "unknown" });
     // gate-override is an action command: it must be recognized (NOT downgraded to "help") and carry the
     // trailing free text as its reason.
     expect(parseGittensoryMentionCommand("@gittensory gate-override")).toMatchObject({ name: "gate-override", reason: undefined });
@@ -81,8 +83,61 @@ describe("GitHub mention commands", () => {
     expect(parseGittensoryMentionCommand("@gittensory explain finding-7")).toMatchObject({ name: "explain", argument: "finding-7" });
     expect(parseGittensoryMentionCommand("@gittensory explain finding-7")).not.toHaveProperty("reason");
     // An unknown verb still resolves to "help", and a bare mention still resolves to "help" (unchanged).
-    expect(parseGittensoryMentionCommand("@gittensory reveiw")).toMatchObject({ name: "help" });
+    expect(parseGittensoryMentionCommand("@gittensory reveiw")).toMatchObject({ name: "help", unknownVerb: "reveiw" });
     expect(parseGittensoryMentionCommand("@gittensory")).toMatchObject({ name: "help" });
+    expect(parseGittensoryMentionCommand("@gittensory")?.unknownVerb).toBeUndefined();
+  });
+
+  it("surfaces did-you-mean hints in the help card for close typos (#2170)", () => {
+    expect(suggestCommand("prefliht")).toBe("preflight");
+    expect(suggestCommand("reveiw")).toBe("review");
+    const typo = parseGittensoryMentionCommand("@gittensory prefliht")!;
+    const typoBody = buildPublicAgentCommandComment({
+      command: typo,
+      repo: null,
+      issue: { number: 1, title: "t", state: "open" },
+      pullRequest: null,
+      actorKind: "maintainer",
+    });
+    expect(typoBody).toContain("Did you mean `@gittensory preflight`?");
+    const far = parseGittensoryMentionCommand("@gittensory zzzz")!;
+    const farBody = buildPublicAgentCommandComment({
+      command: far,
+      repo: null,
+      issue: { number: 1, title: "t", state: "open" },
+      pullRequest: null,
+      actorKind: "maintainer",
+    });
+    expect(farBody).not.toContain("Did you mean");
+    const ok = parseGittensoryMentionCommand("@gittensory preflight")!;
+    const okBody = buildPublicAgentCommandComment({
+      command: ok,
+      repo: null,
+      issue: { number: 1, title: "t", state: "open" },
+      pullRequest: null,
+      actorKind: "maintainer",
+    });
+    expect(okBody).not.toContain("Did you mean");
+    const bareHelp = parseGittensoryMentionCommand("@gittensory")!;
+    const bareHelpBody = buildPublicAgentCommandComment({
+      command: bareHelp,
+      repo: null,
+      issue: { number: 1, title: "t", state: "open" },
+      pullRequest: null,
+      actorKind: "maintainer",
+    });
+    expect(bareHelpBody).not.toContain("Did you mean");
+    expect(bareHelpBody).toContain("`@gittensory help` shows this command list.");
+  });
+
+  it("helpSections renders did-you-mean only for close unknown verbs (#2170)", () => {
+    const typo = githubCommandsInternals.helpSections("reveiw");
+    expect(typo.join("\n")).toContain("Did you mean `@gittensory review`?");
+    const far = githubCommandsInternals.helpSections("zzzz");
+    expect(far.join("\n")).not.toContain("Did you mean");
+    const bare = githubCommandsInternals.helpSections();
+    expect(bare.join("\n")).not.toContain("Did you mean");
+    expect(bare.join("\n")).toContain("**Commands**");
   });
 
   it("isGittensoryActionCommand distinguishes action verbs from Q&A commands", () => {
