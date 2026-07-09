@@ -14,6 +14,12 @@ import {
   validateFindOpportunitiesInput,
 } from "./find-opportunities";
 import {
+  MAX_ISSUE_RAG_OWNER_LENGTH,
+  MAX_ISSUE_RAG_REPO_LENGTH,
+  runIssueRagRetrieval,
+  validateIssueRagInput,
+} from "./issue-rag";
+import {
   authenticatePrivateToken,
   extractBearerToken,
   isAuthorizedGitHubSessionLogin,
@@ -246,6 +252,15 @@ const checkBeforeStartShape = {
   issueNumber: z.number().int().positive().optional(),
   title: z.string().min(1).max(PREFLIGHT_LIMITS.titleChars).optional(),
   plannedPaths: z.array(z.string().max(PREFLIGHT_LIMITS.changedFileChars)).max(PREFLIGHT_LIMITS.changedFiles).optional(),
+};
+
+const issueRagShape = {
+  owner: z.string().max(MAX_ISSUE_RAG_OWNER_LENGTH),
+  repo: z.string().max(MAX_ISSUE_RAG_REPO_LENGTH),
+  title: z.string().max(PREFLIGHT_LIMITS.titleChars),
+  body: z.string().max(PREFLIGHT_LIMITS.bodyChars).optional(),
+  labels: z.array(z.string().max(PREFLIGHT_LIMITS.labelChars)).max(PREFLIGHT_LIMITS.labels).optional(),
+  topK: z.number().int().min(1).max(12).optional(),
 };
 
 const findOpportunitiesShape = {
@@ -1055,6 +1070,26 @@ const checkBeforeStartOutputSchema = {
   report: z.unknown().optional(),
 };
 
+const issueRagOutputSchema = {
+  status: z.string().optional(),
+  repoFullName: z.string().optional(),
+  reason: z.string().optional(),
+  telemetry: z
+    .object({
+      attempted: z.boolean().optional(),
+      injected: z.boolean().optional(),
+      candidates: z.number().optional(),
+      kept: z.number().optional(),
+      topScore: z.number().optional(),
+      minScore: z.number().optional(),
+      reranked: z.boolean().optional(),
+      injectedChars: z.number().optional(),
+      retrievedPathCount: z.number().optional(),
+      retrievedPaths: z.array(z.string()).optional(),
+    })
+    .optional(),
+};
+
 const findOpportunitiesOutputSchema = {
   status: z.string().optional(),
   ranked: z
@@ -1727,6 +1762,17 @@ export class GittensoryMcp {
         outputSchema: findOpportunitiesOutputSchema,
       },
       async (input) => this.toolResult(await this.findOpportunities(input)),
+    );
+
+    server.registerTool(
+      "gittensory_retrieve_issue_context",
+      {
+        description:
+          "Metadata-only, repo-scoped issue-centric RAG retrieval for the miner analyze phase. Composes an embeddable query from issue title/body/labels and returns retrieved file paths plus retrieval scores — never chunk bodies or source text. Requires hosted Vectorize/D1; degrades to empty paths when unavailable.",
+        inputSchema: issueRagShape,
+        outputSchema: issueRagOutputSchema,
+      },
+      async (input) => this.toolResult(await this.retrieveIssueContext(input)),
     );
 
     server.registerTool(
@@ -2551,6 +2597,28 @@ export class GittensoryMcp {
         result.status === "ok"
           ? `Gittensory ranked ${count} metadata-only opportunit${count === 1 ? "y" : "ies"}.`
           : "Gittensory could not rank opportunities for this request.",
+      data: result as unknown as Record<string, unknown>,
+    };
+  }
+
+  private async retrieveIssueContext(input: z.infer<z.ZodObject<typeof issueRagShape>>): Promise<ToolPayload> {
+    const validated = validateIssueRagInput(input);
+    if (!validated.ok) {
+      return {
+        summary: "Invalid issue-context retrieval request.",
+        data: { status: "invalid_request", repoFullName: "", reason: validated.reason, telemetry: { attempted: false, injected: false, retrievedPaths: [] } },
+      };
+    }
+    await this.requireRepoAccess(validated.value.repoFullName);
+    const result = await runIssueRagRetrieval(this.env, validated.value);
+    const pathCount = result.telemetry.retrievedPathCount;
+    return {
+      summary:
+        result.status === "query_too_short"
+          ? "Issue query is below the retrieval floor; no RAG context was fetched."
+          : result.telemetry.injected
+            ? `Gittensory retrieved metadata-only context for ${pathCount} related path${pathCount === 1 ? "" : "s"}.`
+            : "Gittensory found no issue-centric RAG context for this request.",
       data: result as unknown as Record<string, unknown>,
     };
   }
