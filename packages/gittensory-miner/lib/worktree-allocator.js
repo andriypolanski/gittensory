@@ -130,7 +130,7 @@ function ensureSlots(db, worktreeBaseDir, maxConcurrency) {
   }
 }
 
-function reclaimOrphanedAllocations(db, processPid) {
+function reclaimOrphanedAllocations(db) {
   const orphans = db
     .prepare("SELECT slot_index, owner_pid FROM worktree_slots WHERE status = 'active'")
     .all();
@@ -140,7 +140,7 @@ function reclaimOrphanedAllocations(db, processPid) {
     WHERE slot_index = ?
   `);
   for (const row of orphans) {
-    if (row.owner_pid === processPid && isProcessAlive(processPid)) continue;
+    if (row.owner_pid !== null && isProcessAlive(row.owner_pid)) continue;
     reclaim.run(row.slot_index);
   }
 }
@@ -160,7 +160,7 @@ export function openWorktreeAllocator(options = {}) {
   db.exec("PRAGMA busy_timeout = 5000");
   ensureSlotTable(db);
   ensureSlots(db, worktreeBaseDir, maxConcurrency);
-  reclaimOrphanedAllocations(db, processPid);
+  reclaimOrphanedAllocations(db);
 
   const getByAttempt = db.prepare(
     "SELECT slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, allocated_at FROM worktree_slots WHERE attempt_id = ?",

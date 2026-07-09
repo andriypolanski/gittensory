@@ -218,6 +218,25 @@ describe("gittensory-miner worktree allocator collisions (#4298)", () => {
     expect(restarted.acquire("attempt-live", "acme/widgets").status).toBe("active");
     expect(restarted.listSlots().filter((slot) => slot.status === "active")).toHaveLength(1);
   });
+
+  it("does not reclaim active slots owned by another live process on reopen", () => {
+    const paths = tempPaths();
+    const ownerPid = process.pid;
+
+    const owner = openAllocator(paths, { maxConcurrency: 1, processPid: ownerPid });
+    const allocation = owner.acquire("attempt-live-owner", "acme/widgets");
+    owner.close();
+    allocators.pop();
+
+    const peer = openAllocator(paths, { maxConcurrency: 1, processPid: 99_999 });
+    const active = peer.listSlots().find((slot) => slot.status === "active");
+    expect(active).toMatchObject({
+      attemptId: "attempt-live-owner",
+      worktreePath: allocation.worktreePath,
+      ownerPid,
+    });
+    expect(() => peer.acquire("attempt-peer", "acme/other")).toThrow("worktree_capacity_exceeded");
+  });
 });
 
 function mkdirSeed(paths: ReturnType<typeof tempPaths>, ownerPid: number) {
