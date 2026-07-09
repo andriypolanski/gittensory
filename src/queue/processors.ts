@@ -7725,7 +7725,10 @@ export async function runAiSlopForAdvisory(
       outcome: "completed",
       detail: "slop advisory paused (commit threshold); this head has already been reviewed enough times",
       metadata: { repoFullName: args.repoFullName, headSha: args.advisory.headSha },
-    }).catch(() => undefined);
+    }).catch(
+      /* v8 ignore next -- fail-safe: an audit write failure never blocks the handler */
+      () => undefined,
+    );
     return;
   }
   try {
