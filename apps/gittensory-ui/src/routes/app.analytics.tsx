@@ -15,6 +15,8 @@ import { GatePrecisionCard } from "@/components/site/app-panels/gate-precision-c
 import type { GateEvalReport } from "@/components/site/app-panels/gate-precision-card-model";
 import { CycleTimeCard } from "@/components/site/app-panels/cycle-time-card";
 import type { CycleTimeAggregate } from "@/components/site/app-panels/cycle-time-card-model";
+import { ReversalHealthCard } from "@/components/site/app-panels/reversal-health-card";
+import type { ReversalHealth } from "@/components/site/app-panels/reversal-health-card-model";
 import { AnalyticsCardShell } from "@/components/site/app-panels/analytics-card-shell";
 import {
   AcceptanceRateCard,
@@ -116,6 +118,7 @@ type OperatorDashboard = {
   upstreamDrift?: { status?: string; openReportCount?: number } | null;
   gateEval?: GateEvalReport;
   cycleTime?: CycleTimeAggregate;
+  agentHealth?: ReversalHealth;
   acceptance?: FindingAcceptance;
   findingsBreakdown?: FindingsBreakdown;
 };
@@ -219,6 +222,7 @@ function ProductAnalytics() {
             />
           )}
 
+          {data.agentHealth ? <ReversalHealthCard health={data.agentHealth} /> : null}
           <AcceptanceRateCard acceptance={data.acceptance} />
 
           <FindingsBreakdownCard findings={data.findingsBreakdown} />
