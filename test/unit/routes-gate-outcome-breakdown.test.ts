@@ -95,7 +95,7 @@ describe("GET /v1/app/maintainer-dashboard gateOutcomeBreakdown (#2203)", () => 
       eventType: "agent.action.merge",
       actor: "gittensory",
       targetKey: "owner/repo#1",
-      outcome: "dry_run",
+      outcome: "queued",
       createdAt: now,
     });
     await recordAuditEvent(env, {
