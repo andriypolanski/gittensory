@@ -29,6 +29,9 @@ describe("gate-outcome-card-model (#2203)", () => {
     const segments = gateOutcomeSegments(breakdown());
     expect(segments.map((segment) => segment.key)).toEqual(["autoMerged", "autoClosed", "held"]);
     expect(segments.map((segment) => segment.widthPct)).toEqual([60, 30, 10]);
+    expect(new Set(segments.map((segment) => segment.barClassName)).size).toBe(3);
+    expect(segments.find((segment) => segment.key === "autoMerged")?.barClassName).toBe("bg-success");
+    expect(segments.find((segment) => segment.key === "autoClosed")?.barClassName).toBe("bg-danger");
   });
 
   it("omits a zero-count bucket from the stacked bar while keeping rates on the card", () => {

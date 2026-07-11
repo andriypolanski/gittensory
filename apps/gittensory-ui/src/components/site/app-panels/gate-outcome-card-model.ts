@@ -25,8 +25,8 @@ export type GateOutcomeSegment = {
 };
 
 const SEGMENT_META: Record<GateOutcomeSegment["key"], { label: string; barClassName: string }> = {
-  autoMerged: { label: "Auto-merged", barClassName: "bg-mint" },
-  autoClosed: { label: "Auto-closed", barClassName: "bg-coral" },
+  autoMerged: { label: "Auto-merged", barClassName: "bg-success/80" },
+  autoClosed: { label: "Auto-closed", barClassName: "bg-danger/80" },
   held: { label: "Held / manual", barClassName: "bg-warning/80" },
 };
 
