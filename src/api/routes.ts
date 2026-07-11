@@ -250,6 +250,7 @@ import { buildContributorOpenPrMonitor } from "../signals/contributor-open-pr-mo
 import { buildPullRequestReviewability, type PullRequestReviewability } from "../signals/reward-risk";
 import { buildLocalBranchAnalysis, findCurrentBranchPullRequest } from "../signals/local-branch";
 import { buildSlopAssessment, buildIssueSlopAssessment, SLOP_RUBRIC_MARKDOWN, ISSUE_SLOP_RUBRIC_MARKDOWN } from "../signals/slop";
+import { translateIdeaToTaskGraph } from "../../packages/gittensory-engine/src/idea-intake-bridge.js";
 import { buildPredictedGateVerdict } from "../rules/predicted-gate";
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
 import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
@@ -483,6 +484,12 @@ const slopRiskSchema = z.object({
 const issueSlopSchema = z.object({
   title: z.string().max(500).optional(),
   body: z.string().max(40000).optional(),
+});
+
+const translateIdeaToTaskGraphSchema = z.object({
+  repoFullName: z.string().min(3).max(120),
+  idea: z.string().min(1).max(8000),
+  title: z.string().min(1).max(200).optional(),
 });
 
 const selfhostDeadLetterQueueQuerySchema = z
@@ -2842,6 +2849,19 @@ export function createApp() {
     const parsed = issueSlopSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_issue_slop_request", issues: parsed.error.issues }, 400);
     return c.json({ ...buildIssueSlopAssessment(parsed.data), rubric: ISSUE_SLOP_RUBRIC_MARKDOWN });
+  });
+
+  app.post("/v1/idea-intake/translate", async (c) => {
+    const body = await c.req.json().catch(() => null);
+    const parsed = translateIdeaToTaskGraphSchema.safeParse(body);
+    if (!parsed.success) {
+      return c.json({ error: "invalid_idea_intake_request", issues: parsed.error.issues }, 400);
+    }
+    const result = translateIdeaToTaskGraph(parsed.data);
+    if (!result.ok) {
+      return c.json({ ok: false, errors: result.errors }, 400);
+    }
+    return c.json(result);
   });
 
   app.post(OPPORTUNITIES_FIND_PATH, async (c) => {

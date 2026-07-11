@@ -399,6 +399,28 @@ export {
   type FeasibilityVerdict,
 } from "./feasibility.js";
 export {
+  F1_COMPLEX_IDEA_EXAMPLE,
+  F1_SIMPLE_IDEA_EXAMPLE,
+  IDEA_INTAKE_BRIDGE_VERSION,
+  IDEA_INTAKE_MAX_IDEA_CHARS,
+  expectedF1ComplexTaskGraph,
+  expectedF1SimpleTaskGraph,
+  translateIdeaToTaskGraph,
+  translateIdeaToTaskGraphOrThrow,
+  validateIdeaSubmission,
+  validateIdeaTaskGraph,
+  type IdeaIntakeError,
+  type IdeaIntakeFailure,
+  type IdeaIntakeResult,
+  type IdeaIntakeSuccess,
+  type IdeaSubmissionInput,
+  type IdeaTaskClaimableUnit,
+  type IdeaTaskGraph,
+  type IdeaTaskGraphNode,
+  type IdeaTaskScoringDimension,
+  type IdeaTaskScoringRubric,
+} from "./idea-intake-bridge.js";
+export {
   buildMetadataRankInput,
   computeMetadataDupRisk,
   computeMetadataFeasibility,

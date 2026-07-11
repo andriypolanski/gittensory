@@ -146,6 +146,7 @@ import {
 } from "./local-write-tools";
 import { classifyTestCoverage, isCodeFile, isTestPath, TEST_FRAMEWORKS } from "../signals/test-evidence";
 import { applyStepResult, buildPlanDag, nextReadySteps, planProgress, validatePlanDag, type PlanDag } from "../services/plan-dag";
+import { translateIdeaToTaskGraph } from "../../packages/gittensory-engine/src/idea-intake-bridge.js";
 import { buildFocusManifestValidation } from "../services/focus-manifest-validation";
 import { isGlobalAgentPause, resolveAgentActionMode, resolveAgentPermissionReadiness } from "../settings/agent-execution";
 import { AGENT_ACTION_CLASSES, isActingAutonomyLevel, resolveAutonomy } from "../settings/autonomy";
@@ -473,6 +474,46 @@ const planViewOutputSchema = {
     .optional(),
   readySteps: z.array(z.object({ id: z.string(), title: z.string() })).optional(),
   validation: z.object({ valid: z.boolean(), errors: z.array(z.string()) }).optional(),
+};
+
+const translateIdeaToTaskGraphShape = {
+  repoFullName: z.string().min(3).max(120),
+  idea: z.string().min(1).max(8000),
+  title: z.string().min(1).max(200).optional(),
+};
+const translateIdeaToTaskGraphOutputSchema = {
+  ok: z.boolean(),
+  taskGraph: z
+    .object({
+      version: z.literal(1),
+      repoFullName: z.string(),
+      sourceIdea: z.string(),
+      summary: z.string(),
+      tasks: z.array(
+        z.object({
+          id: z.string(),
+          title: z.string(),
+          description: z.string(),
+          acceptanceCriteria: z.array(z.string()),
+          scoringRubric: z.object({
+            dimensions: z.array(
+              z.object({ id: z.string(), label: z.string(), description: z.string(), weight: z.number() }),
+            ),
+            passThreshold: z.number(),
+          }),
+          claimableUnit: z.object({
+            kind: z.enum(["issue", "direct_pr"]),
+            identifierHint: z.string(),
+            summary: z.string(),
+          }),
+          dependsOn: z.array(z.string()),
+        }),
+      ),
+    })
+    .optional(),
+  errors: z
+    .array(z.object({ code: z.string(), message: z.string(), field: z.string().optional() }))
+    .optional(),
 };
 
 // #784 (MCP slice) — propose-action: a maintainer stages an action into the approval queue (#779).
@@ -2016,6 +2057,17 @@ export class GittensoryMcp {
       async (input) => this.toolResult(this.recordStepResult(input)),
     );
 
+    server.registerTool(
+      "gittensory_translate_idea_to_task_graph",
+      {
+        description:
+          "Translate a freeform customer idea into a structured, claimable task-graph with per-task acceptance criteria and scoring rubrics (#4779/#4798). Pure metadata — no GitHub writes.",
+        inputSchema: translateIdeaToTaskGraphShape,
+        outputSchema: translateIdeaToTaskGraphOutputSchema,
+      },
+      async (input) => this.translateIdeaToTaskGraphTool(input),
+    );
+
     // #784 (MCP control surface, read side): a repo's agent automation posture — autonomy dial, kill-switch /
     // dry-run mode, write-permission readiness, and the pending-approval count. Repo-access scoped.
     server.registerTool(
@@ -3340,6 +3392,26 @@ export class GittensoryMcp {
   private recordStepResult(input: z.infer<z.ZodObject<typeof recordStepResultShape>>): ToolPayload {
     const plan = applyStepResult(input.plan as PlanDag, input.stepId, { outcome: input.outcome, ...(input.error !== undefined ? { error: input.error } : {}) });
     return { summary: `Recorded ${input.outcome} for step ${input.stepId}; plan is now ${planProgress(plan).status}.`, data: this.planView(plan) };
+  }
+
+  private translateIdeaToTaskGraphTool(input: z.infer<z.ZodObject<typeof translateIdeaToTaskGraphShape>>) {
+    const result = translateIdeaToTaskGraph(input);
+    if (!result.ok) {
+      return {
+        content: [
+          {
+            type: "text" as const,
+            text: `Idea intake failed: ${result.errors.map((error) => error.message).join(" ")}\n\n${JSON.stringify(result, null, 2)}`,
+          },
+        ],
+        structuredContent: result as unknown as Record<string, unknown>,
+        isError: true,
+      };
+    }
+    return this.toolResult({
+      summary: `Translated idea into ${result.taskGraph.tasks.length} claimable task(s) for ${result.taskGraph.repoFullName}.`,
+      data: result as unknown as Record<string, unknown>,
+    });
   }
 
   // #784 — read the agent automation state for a repo. Repo-access scoped; surfaces the count (not the

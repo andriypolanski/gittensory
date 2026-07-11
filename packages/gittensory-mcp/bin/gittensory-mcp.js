@@ -5,7 +5,7 @@ import { homedir } from "node:os";
 import { delimiter, dirname, join } from "node:path";
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
-import { buildFeasibilityVerdict } from "@jsonbored/gittensory-engine";
+import { buildFeasibilityVerdict, translateIdeaToTaskGraph } from "@jsonbored/gittensory-engine";
 import { z } from "zod";
 import { buildBranchAnalysisPayload, collectLocalDiff, collectLocalBranchMetadata, probeLocalScorer, referenceScorePreviewExample, resolveScorePreviewCommand, resolveWorkspaceCwd, sanitizeLocalScorerStatus, setupGuidanceForLocalScorer, isTestFile } from "../lib/local-branch.js";
 import { formatTable } from "../lib/format-table.js";
@@ -201,6 +201,12 @@ const feasibilityGateShape = {
   duplicateClusterRisk: z.enum(["none", "low", "medium", "high"]),
   issueStatus: z.enum(["ready", "needs_proof", "hold", "do_not_use", "duplicate", "invalid", "missing"]),
   found: z.boolean().optional(),
+};
+
+const translateIdeaToTaskGraphShape = {
+  repoFullName: z.string().min(3).max(120),
+  idea: z.string().min(1).max(8000),
+  title: z.string().min(1).max(200).optional(),
 };
 
 const findOpportunitiesShape = {
@@ -522,6 +528,10 @@ const STDIO_TOOL_DESCRIPTORS = [
   {
     name: "gittensory_feasibility_gate",
     description: "Pure local go/raise/avoid feasibility verdict from claim status, duplicate-cluster risk, and issue quality/lifecycle status — the same discriminants the analyze-phase feasibility gate branches on. No API round-trip.",
+  },
+  {
+    name: "gittensory_translate_idea_to_task_graph",
+    description: "Translate a freeform customer idea into a structured, claimable task-graph with per-task acceptance criteria and scoring rubrics (#4779/#4798). Pure metadata — no API round-trip.",
   },
 ];
 
@@ -1199,6 +1209,30 @@ server.registerTool(
       "Gittensory feasibility gate.",
       buildFeasibilityVerdict({ claimStatus, duplicateClusterRisk, issueStatus, found }),
     ),
+);
+
+server.registerTool(
+  "gittensory_translate_idea_to_task_graph",
+  {
+    description: stdioToolDescription("gittensory_translate_idea_to_task_graph"),
+    inputSchema: translateIdeaToTaskGraphShape,
+  },
+  ({ repoFullName, idea, title }) => {
+    const result = translateIdeaToTaskGraph({ repoFullName, idea, title });
+    if (!result.ok) {
+      return {
+        content: [
+          {
+            type: "text",
+            text: `Idea intake failed: ${result.errors.map((error) => error.message).join(" ")}\n\n${JSON.stringify(result, null, 2)}`,
+          },
+        ],
+        structuredContent: result,
+        isError: true,
+      };
+    }
+    return toolResult("Gittensory idea-intake bridge.", result);
+  },
 );
 
 // ── Resources: decision-pack, doctor, compatibility, changelog (#292) ─────────
