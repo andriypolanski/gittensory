@@ -108,6 +108,24 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(store.markDone("o/a", "work")).toBeNull();
   });
 
+  it("markFailed releases an in-progress item back to queued for a halted run (#2347)", () => {
+    const store = tempStore();
+    store.enqueue({ repoFullName: "o/a", identifier: "work", priority: 1 });
+    expect(store.dequeueNext()?.status).toBe("in_progress");
+    expect(store.markFailed("o/a", "work")?.status).toBe("queued");
+    expect(store.markFailed("o/a", "work")).toBeNull();
+    expect(store.dequeueNext()?.identifier).toBe("work");
+  });
+
+  it("markFailed is a no-op for queued or done items", () => {
+    const store = tempStore();
+    store.enqueue({ repoFullName: "o/a", identifier: "queued", priority: 1 });
+    expect(store.markFailed("o/a", "queued")).toBeNull();
+    store.markDone("o/a", "queued");
+    expect(store.markFailed("o/a", "queued")).toBeNull();
+    expect(store.markFailed("o/a", "missing")).toBeNull();
+  });
+
   it("isolates listQueue by repo and lists everything when unfiltered", () => {
     const store = tempStore();
     store.enqueue({ repoFullName: "o/a", identifier: "1", priority: 1 });
@@ -165,5 +183,7 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(() => store.listQueue("no-slash")).toThrow("invalid_repo_full_name");
     expect(() => store.markDone("no-slash", "1")).toThrow("invalid_repo_full_name");
     expect(() => store.markDone("o/a", "  ")).toThrow("invalid_identifier");
+    expect(() => store.markFailed("no-slash", "1")).toThrow("invalid_repo_full_name");
+    expect(() => store.markFailed("o/a", "  ")).toThrow("invalid_identifier");
   });
 });
