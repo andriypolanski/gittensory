@@ -210,6 +210,10 @@ export function markDone(repoFullName, identifier) {
   return getDefaultPortfolioQueueStore().markDone(repoFullName, identifier);
 }
 
+export function markFailed(repoFullName, identifier) {
+  return getDefaultPortfolioQueueStore().markFailed(repoFullName, identifier);
+}
+
 export function closeDefaultPortfolioQueueStore() {
   if (!defaultPortfolioQueueStore) return;
   defaultPortfolioQueueStore.close();

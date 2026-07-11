@@ -5,7 +5,10 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   QUEUE_STATUSES,
   closeDefaultPortfolioQueueStore,
+  dequeueNext,
+  enqueue,
   initPortfolioQueueStore,
+  markFailed,
   resolvePortfolioQueueDbPath,
 } from "../../packages/gittensory-miner/lib/portfolio-queue.js";
 
@@ -169,6 +172,16 @@ describe("gittensory-miner portfolio/queue store (#2292)", () => {
     expect(store.listQueue("o/a").map((entry) => entry.identifier)).toEqual(["A", "B"]);
     expect(store.dequeueNext()?.identifier).toBe("A");
     expect(store.dequeueNext()?.identifier).toBe("B");
+  });
+
+  it("module-level markFailed delegates to the default portfolio-queue store (#2347)", () => {
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-portfolio-default-"));
+    roots.push(root);
+    vi.stubEnv("GITTENSORY_MINER_PORTFOLIO_QUEUE_DB", join(root, "portfolio-queue.sqlite3"));
+    enqueue({ repoFullName: "o/a", identifier: "work", priority: 1 });
+    expect(dequeueNext()?.status).toBe("in_progress");
+    expect(markFailed("o/a", "work")?.status).toBe("queued");
+    expect(markFailed("o/a", "work")).toBeNull();
   });
 
   it("rejects malformed inputs across the shared validation contract (enqueue, listQueue, markDone)", () => {
