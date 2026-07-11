@@ -19,7 +19,8 @@ export function GateOutcomeCard({ breakdown }: { breakdown: GateOutcomeCardData 
         <div>
           <h2 className="font-display text-token-lg font-semibold">Gate outcomes</h2>
           <p className="mt-1 text-token-xs text-muted-foreground">
-            Terminal gate dispositions from audit events over the last {breakdown.windowDays} day(s).
+            Terminal gate dispositions from audit events over the last {breakdown.windowDays}{" "}
+            day(s).
           </p>
         </div>
         <BoundaryBadge boundary="public" />
@@ -29,17 +30,29 @@ export function GateOutcomeCard({ breakdown }: { breakdown: GateOutcomeCardData 
         <Stat
           label="Auto-merged"
           value={String(breakdown.counts.autoMerged)}
-          hint={<span className="text-muted-foreground">{formatGateOutcomeRate(breakdown.rates.autoMerged)} of outcomes</span>}
+          hint={
+            <span className="text-muted-foreground">
+              {formatGateOutcomeRate(breakdown.rates.autoMerged)} of outcomes
+            </span>
+          }
         />
         <Stat
           label="Auto-closed"
           value={String(breakdown.counts.autoClosed)}
-          hint={<span className="text-muted-foreground">{formatGateOutcomeRate(breakdown.rates.autoClosed)} of outcomes</span>}
+          hint={
+            <span className="text-muted-foreground">
+              {formatGateOutcomeRate(breakdown.rates.autoClosed)} of outcomes
+            </span>
+          }
         />
         <Stat
           label="Held / manual"
           value={String(breakdown.counts.held)}
-          hint={<span className="text-muted-foreground">{formatGateOutcomeRate(breakdown.rates.held)} of outcomes</span>}
+          hint={
+            <span className="text-muted-foreground">
+              {formatGateOutcomeRate(breakdown.rates.held)} of outcomes
+            </span>
+          }
         />
       </div>
 
@@ -65,7 +78,10 @@ export function GateOutcomeCard({ breakdown }: { breakdown: GateOutcomeCardData 
           <ul className="mt-2 flex flex-wrap gap-x-4 gap-y-1 text-token-2xs text-muted-foreground">
             {segments.map((segment) => (
               <li key={segment.key} className="inline-flex items-center gap-1.5">
-                <span className={`inline-block size-2 rounded-full ${segment.barClassName}`} aria-hidden />
+                <span
+                  className={`inline-block size-2 rounded-full ${segment.barClassName}`}
+                  aria-hidden
+                />
                 {segment.label} · {segment.count}
               </li>
             ))}

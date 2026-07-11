@@ -24,6 +24,7 @@ describe("buildGateOutcomeBreakdown (#2203)", () => {
       total: 10,
       rates: { autoMerged: 60, autoClosed: 30, held: 10 },
     });
+    expect(result.summary).toContain("6 auto-merged");
     expect(JSON.stringify(result)).not.toMatch(FORBIDDEN_PUBLIC_TERMS);
   });
 
@@ -51,6 +52,7 @@ describe("buildGateOutcomeBreakdown (#2203)", () => {
     expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.merge", outcome: "dry_run" })).toBeNull();
     expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.close", outcome: "denied" })).toBeNull();
     expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.approve", outcome: "completed" })).toBeNull();
+    expect(classifyGateOutcomeAuditBucket({ eventType: "agent.action.hold", outcome: "completed" })).toBe("held");
   });
 
   it("skips unrecognized audit rollups when folding counts", () => {

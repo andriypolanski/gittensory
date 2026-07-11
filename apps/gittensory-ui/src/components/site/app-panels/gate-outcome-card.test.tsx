@@ -19,7 +19,8 @@ function breakdown(overrides: Partial<GateOutcomeCardData> = {}): GateOutcomeCar
     counts: { autoMerged: 6, autoClosed: 3, held: 1 },
     total: 10,
     rates: { autoMerged: 60, autoClosed: 30, held: 10 },
-    summary: "10 gate outcome(s) in the last 30 day(s): 6 auto-merged, 3 auto-closed, 1 held for manual review.",
+    summary:
+      "10 gate outcome(s) in the last 30 day(s): 6 auto-merged, 3 auto-closed, 1 held for manual review.",
     ...overrides,
   };
 }
@@ -30,13 +31,21 @@ describe("gate-outcome-card-model (#2203)", () => {
     expect(segments.map((segment) => segment.key)).toEqual(["autoMerged", "autoClosed", "held"]);
     expect(segments.map((segment) => segment.widthPct)).toEqual([60, 30, 10]);
     expect(new Set(segments.map((segment) => segment.barClassName)).size).toBe(3);
-    expect(segments.find((segment) => segment.key === "autoMerged")?.barClassName).toBe("bg-success");
-    expect(segments.find((segment) => segment.key === "autoClosed")?.barClassName).toBe("bg-danger");
+    expect(segments.find((segment) => segment.key === "autoMerged")?.barClassName).toBe(
+      "bg-success/80",
+    );
+    expect(segments.find((segment) => segment.key === "autoClosed")?.barClassName).toBe(
+      "bg-danger/80",
+    );
   });
 
   it("omits a zero-count bucket from the stacked bar while keeping rates on the card", () => {
     const segments = gateOutcomeSegments(
-      breakdown({ counts: { autoMerged: 4, autoClosed: 0, held: 1 }, total: 5, rates: { autoMerged: 80, autoClosed: 0, held: 20 } }),
+      breakdown({
+        counts: { autoMerged: 4, autoClosed: 0, held: 1 },
+        total: 5,
+        rates: { autoMerged: 80, autoClosed: 0, held: 20 },
+      }),
     );
     expect(segments.map((segment) => segment.key)).toEqual(["autoMerged", "held"]);
     expect(formatGateOutcomeRate(0)).toBe("0%");
@@ -64,7 +73,9 @@ describe("GateOutcomeCard (#2203)", () => {
     expect(screen.getByText("6")).toBeTruthy();
     expect(screen.getByText("3")).toBeTruthy();
     expect(screen.getByText("60% of outcomes")).toBeTruthy();
-    expect(screen.getByLabelText(/Gate outcome mix: 6 auto-merged, 3 auto-closed, 1 held/i)).toBeTruthy();
+    expect(
+      screen.getByLabelText(/Gate outcome mix: 6 auto-merged, 3 auto-closed, 1 held/i),
+    ).toBeTruthy();
   });
 
   it("shows a zero bucket as 0% while still rendering the other segments", () => {
@@ -78,7 +89,9 @@ describe("GateOutcomeCard (#2203)", () => {
       />,
     );
     expect(screen.getByText("0% of outcomes")).toBeTruthy();
-    expect(screen.getByLabelText(/Gate outcome mix: 2 auto-merged, 0 auto-closed, 2 held/i)).toBeTruthy();
+    expect(
+      screen.getByLabelText(/Gate outcome mix: 2 auto-merged, 0 auto-closed, 2 held/i),
+    ).toBeTruthy();
   });
 
   it("renders an empty state instead of the proportion bar when there are no audit events", () => {

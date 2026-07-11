@@ -3164,7 +3164,6 @@ export async function listGateOutcomeAuditEventRollups(
     return sql`lower(${auditEvents.targetKey}) >= ${prefix} and lower(${auditEvents.targetKey}) < ${upperBound}`;
   });
   const repoFilter = or(...repoFilters);
-  if (!repoFilter) return [];
 
   const rows = await getDb(env.DB)
     .select({

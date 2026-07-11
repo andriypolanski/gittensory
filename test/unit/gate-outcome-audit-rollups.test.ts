@@ -52,4 +52,11 @@ describe("listGateOutcomeAuditEventRollups (#2203)", () => {
     const env = createTestEnv();
     await expect(listGateOutcomeAuditEventRollups(env, { repoFullNames: [], sinceIso: "2026-07-01T00:00:00.000Z" })).resolves.toEqual([]);
   });
+
+  it("ignores blank repo names after trimming", async () => {
+    const env = createTestEnv();
+    await expect(
+      listGateOutcomeAuditEventRollups(env, { repoFullNames: ["  ", ""], sinceIso: "2026-07-01T00:00:00.000Z" }),
+    ).resolves.toEqual([]);
+  });
 });
