@@ -31,12 +31,22 @@ export type CandidateIssueSummary = {
   warnings: CandidateIssueWarning[];
 };
 
+export function mapWithConcurrency<T, R>(
+  items: T[],
+  maxConcurrency: number,
+  worker: (item: T, index: number) => Promise<R>,
+  resolveLimit: () => number,
+  sleepFn?: (ms: number) => Promise<unknown>,
+): Promise<R[]>;
+
 export function fetchCandidateIssuesWithSummary(
   targets: FanoutTarget[],
   githubToken: string,
   options?: {
     apiBaseUrl?: string;
     concurrency?: number;
+    rateLimitLowWaterMark?: number;
+    rateLimitHighWaterMark?: number;
     perPage?: number;
     sleepFn?: (ms: number) => Promise<unknown>;
   },
@@ -48,6 +58,8 @@ export function fetchCandidateIssues(
   options?: {
     apiBaseUrl?: string;
     concurrency?: number;
+    rateLimitLowWaterMark?: number;
+    rateLimitHighWaterMark?: number;
     perPage?: number;
     sleepFn?: (ms: number) => Promise<unknown>;
   },
@@ -59,6 +71,8 @@ export function searchCandidateIssuesWithSummary(
   options?: {
     apiBaseUrl?: string;
     concurrency?: number;
+    rateLimitLowWaterMark?: number;
+    rateLimitHighWaterMark?: number;
     perPage?: number;
     sleepFn?: (ms: number) => Promise<unknown>;
   },
@@ -70,6 +84,8 @@ export function searchCandidateIssues(
   options?: {
     apiBaseUrl?: string;
     concurrency?: number;
+    rateLimitLowWaterMark?: number;
+    rateLimitHighWaterMark?: number;
     perPage?: number;
     sleepFn?: (ms: number) => Promise<unknown>;
   },
