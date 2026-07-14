@@ -94,6 +94,10 @@ export type HandoffPacket = {
   /** Reference into the attempt-log primitive (`packages/gittensory-engine/src/miner/attempt-log.ts`) for this
    *  attempt's full decision trail. */
   attemptLogReference: string;
+  /** The passing attempt's changed-file paths, carried through so the submission layer can fingerprint the real
+   *  diff (own-submission recording + self-plagiarism throttle, #5655/#5676) without re-reading the worktree.
+   *  Optional so hand-built packets (e.g. harness fixtures) need not supply it. */
+  changedFiles?: readonly { path: string }[] | undefined;
 };
 
 export type IterateLoopDecision = {

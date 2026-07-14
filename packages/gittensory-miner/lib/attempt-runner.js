@@ -1,7 +1,8 @@
-import { buildOpenPrSpec } from "@loopover/engine";
+import { buildOpenPrSpec, fingerprintFromChangedFiles } from "@loopover/engine";
 import { runIterateLoop } from "@loopover/engine";
 import { checkSubmissionFreshness } from "./submission-freshness-check.js";
 import { evaluateGovernorChokepointGatePersisted } from "./governor-chokepoint-persisted.js";
+import { listRecentOwnSubmissions } from "./governor-state.js";
 import { prepareOpenPrSubmission } from "./harness-submission-trigger.js";
 
 // The real driving-loop entrypoint (#2337): the missing link between #2333's iterate-loop orchestrator and an
@@ -31,10 +32,12 @@ import { prepareOpenPrSubmission } from "./harness-submission-trigger.js";
 // evaluateGovernorChokepointGatePersisted -- callers no longer need to hand-thread honest empty/zero defaults
 // on every invocation; `capUsage` is loaded from that same store but its post-attempt save stays the caller's
 // job (see governor-chokepoint-persisted.js's own header for why: nothing computes "the next capUsage" from a
-// verdict, only the attempt's real outcome does). Reputation/self-plagiarism state also has real persistence
-// primitives (governor-state.js) but isn't auto-loaded here yet -- `input.governor.reputationHistory`/
-// `selfPlagiarismCandidate`/`selfPlagiarismRecentSubmissions` are still caller-supplied optional fields on
-// GovernorChokepointInput, same as before.
+// verdict, only the attempt's real outcome does). Self-plagiarism state is now wired here (#5676): the
+// prospective submission's real diff `selfPlagiarismCandidate` (fingerprintFromChangedFiles over the handoff
+// packet's changed files) and the miner's real `selfPlagiarismRecentSubmissions` (governor-state.js's
+// listRecentOwnSubmissions) are computed late -- right before the chokepoint call, after handoff, where the
+// changed files first exist -- and passed in, so chokepoint.ts's selfPlagiarismCheck finally runs on real data.
+// `input.governor.reputationHistory` remains a caller-supplied optional field, not auto-loaded here yet.
 
 /** True once the loop reaches handoff AND every downstream gate (freshness, submission, governor) allows. */
 export const ATTEMPT_OUTCOMES = Object.freeze(["abandon", "stale", "blocked", "governed", "submitted"]);
@@ -141,6 +144,31 @@ export async function runMinerAttempt(input, deps) {
     return { outcome: "blocked", decision: submission.decision, loopResult };
   }
 
+  // Late-augment the self-plagiarism inputs (#5676): the prospective submission's real diff fingerprint and the
+  // miner's real recent-submission history only exist HERE, after handoff -- attempt-cli.js's single early
+  // governor snapshot (buildAttemptGovernorContext) is built before any changed files exist, so it cannot carry
+  // them. This finally feeds chokepoint.ts's selfPlagiarismCheck, which was previously always skipped for lack of
+  // data. Read the history from the SAME governor-state store the chokepoint itself uses (deps.governorState when
+  // provided, else the persisted default via the module-level export). Fail open on a read failure so a
+  // history-store hiccup never blocks an otherwise-allowed real submission.
+  /* v8 ignore next -- buildHandoffPacket always populates changedFiles; the `?? []` only guards a hand-built packet */
+  const changedFilePaths = (handoffPacket.changedFiles ?? []).map((file) => file.path);
+  const selfPlagiarismCandidate = {
+    repoFullName: input.loopInput.repoFullName,
+    fingerprint: fingerprintFromChangedFiles(changedFilePaths),
+    // The prospective submission's own time is "now" -- selfPlagiarismCheck needs a real submittedAt on the
+    // candidate (it denies a candidate lacking one) and uses it for earliest-claimant election vs the priors.
+    submittedAt: new Date(deps.nowMs).toISOString(),
+  };
+  let selfPlagiarismRecentSubmissions;
+  try {
+    selfPlagiarismRecentSubmissions = deps.governorState
+      ? deps.governorState.listRecentOwnSubmissions({ repoFullName: input.loopInput.repoFullName })
+      : listRecentOwnSubmissions({ repoFullName: input.loopInput.repoFullName });
+  } catch {
+    selfPlagiarismRecentSubmissions = [];
+  }
+
   const governed = evaluateGovernorChokepointGatePersisted(
     {
       actionClass: "open_pr",
@@ -148,6 +176,8 @@ export async function runMinerAttempt(input, deps) {
       nowMs: deps.nowMs,
       wouldBeAction: submission.openPrInput,
       ...input.governor,
+      selfPlagiarismCandidate,
+      selfPlagiarismRecentSubmissions,
     },
     {
       ...(deps.governorLedgerAppend ? { append: deps.governorLedgerAppend } : {}),

@@ -10,8 +10,18 @@ vi.mock("@loopover/engine", async () => {
 import { runMinerAttempt } from "../../packages/gittensory-miner/lib/attempt-runner.js";
 import { initEventLedger } from "../../packages/gittensory-miner/lib/event-ledger.js";
 import { initGovernorLedger } from "../../packages/gittensory-miner/lib/governor-ledger.js";
-import { openGovernorState } from "../../packages/gittensory-miner/lib/governor-state.js";
-import { parseFocusManifest, type CodingAgentDriver, type CodingAgentDriverResult } from "../../packages/gittensory-engine/src/index";
+import {
+  closeDefaultGovernorState,
+  listRecentOwnSubmissions,
+  openGovernorState,
+  recordOwnSubmission,
+} from "../../packages/gittensory-miner/lib/governor-state.js";
+import {
+  fingerprintFromChangedFiles,
+  parseFocusManifest,
+  type CodingAgentDriver,
+  type CodingAgentDriverResult,
+} from "../../packages/gittensory-engine/src/index";
 
 const roots: string[] = [];
 const closers: Array<{ close(): void }> = [];
@@ -44,6 +54,8 @@ function tempGovernorState() {
 
 afterEach(() => {
   for (const closer of closers.splice(0)) closer.close();
+  closeDefaultGovernorState();
+  vi.unstubAllEnvs();
   for (const root of roots.splice(0)) rmSync(root, { recursive: true, force: true });
 });
 
@@ -345,5 +357,76 @@ describe("runMinerAttempt (#2337) — the real create->review->gate->submit pipe
     await expect(runMinerAttempt(input, { ...full, claimLedger: undefined } as never)).rejects.toThrow("invalid_claim_ledger");
     await expect(runMinerAttempt(input, { ...full, eventLedger: undefined } as never)).rejects.toThrow("invalid_event_ledger");
     await expect(runMinerAttempt(input, { ...full, nowMs: Number.NaN } as never)).rejects.toThrow("invalid_now_ms");
+  });
+});
+
+describe("runMinerAttempt — real self-plagiarism wiring into the chokepoint (#5676)", () => {
+  const FILES = ["src/upload.ts", "src/retry.ts"];
+  // The prospective submission's own time (candidate.submittedAt = new Date(nowMs)). Kept AFTER every prior below
+  // so the prior wins the earliest-near-duplicate election and the current candidate is the one throttled.
+  const NOW_MS = Date.parse("2026-07-14T00:00:00.000Z");
+
+  function stateWithPriorSubmission(fingerprintFiles: string[]) {
+    const state = tempGovernorState();
+    state.recordOwnSubmission({
+      repoFullName: "acme/widgets",
+      fingerprint: fingerprintFromChangedFiles(fingerprintFiles),
+      submittedAt: "2026-07-13T00:00:00.000Z", // earlier than NOW_MS → the prior is the earliest claimant
+      pullRequestNumber: 41,
+    });
+    return state;
+  }
+
+  it("REGRESSION: a near-duplicate of a prior own submission is throttled by the real chokepoint", async () => {
+    // Prior submission touched the exact same files → identical diff fingerprint → Jaccard similarity 1.0.
+    const governorState = stateWithPriorSubmission(FILES);
+    const deps = baseDeps({ governorState, driver: driverReturning(okDriverResult(FILES)), nowMs: NOW_MS });
+    const result = await runMinerAttempt(baseAttemptInput(), deps);
+    expect(result.outcome).toBe("governed");
+    if (result.outcome !== "governed") throw new Error("expected governed");
+    expect(result.decision.allowed).toBe(false);
+  });
+
+  it("a genuinely distinct submission is NOT throttled and submits normally", async () => {
+    // Prior submission touched unrelated files → disjoint token set → low similarity → allowed.
+    const governorState = stateWithPriorSubmission(["docs/CHANGELOG.md", "README.md"]);
+    const deps = baseDeps({ governorState, driver: driverReturning(okDriverResult(FILES)), nowMs: NOW_MS });
+    const result = await runMinerAttempt(baseAttemptInput(), deps);
+    expect(result.outcome).toBe("submitted");
+  });
+
+  it("an empty own-submission history never throttles (selfPlagiarismCheck no-ops on no priors)", async () => {
+    const result = await runMinerAttempt(baseAttemptInput(), baseDeps());
+    expect(result.outcome).toBe("submitted");
+  });
+
+  it("fails open: a history-store read failure never blocks an otherwise-allowed submission", async () => {
+    const state = tempGovernorState();
+    const throwingState = Object.create(state);
+    throwingState.listRecentOwnSubmissions = () => {
+      throw new Error("db locked");
+    };
+    const result = await runMinerAttempt(baseAttemptInput(), baseDeps({ governorState: throwingState }));
+    expect(result.outcome).toBe("submitted");
+  });
+
+  it("reads the real default governor-state store when no governorState dep is supplied (production path)", async () => {
+    // deps omit governorState, so BOTH the chokepoint's own default-store fallback AND this module's late
+    // augmentation read the same env-pointed store; a matching prior submission there throttles.
+    const root = mkdtempSync(join(tmpdir(), "gittensory-miner-attempt-runner-default-gs-"));
+    roots.push(root);
+    vi.stubEnv("GITTENSORY_MINER_GOVERNOR_STATE_DB", join(root, "governor-state.sqlite3"));
+    recordOwnSubmission({
+      repoFullName: "acme/widgets",
+      fingerprint: fingerprintFromChangedFiles(FILES),
+      submittedAt: "2026-07-13T00:00:00.000Z",
+    });
+    expect(listRecentOwnSubmissions({ repoFullName: "acme/widgets" })).toHaveLength(1);
+    const { governorState: _omit, ...deps } = baseDeps({
+      driver: driverReturning(okDriverResult(FILES)),
+      nowMs: NOW_MS,
+    });
+    const result = await runMinerAttempt(baseAttemptInput(), deps as never);
+    expect(result.outcome).toBe("governed");
   });
 });
