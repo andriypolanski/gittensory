@@ -1465,7 +1465,7 @@ describe("local branch analysis", () => {
     const analysis = buildLocalBranchAnalysis({
       input: {
         login: "jsonbored",
-        repoFullName: "JSONbored/gittensory",
+        repoFullName: "JSONbored/loopover",
         branchName: "miner-mcp-upgrade",
         changedFiles: [{ path: "src/api/routes.ts", additions: 90, deletions: 2, status: "modified" }],
         validation: [{ command: "npm run test:ci", status: "not_run" }],

@@ -63,7 +63,7 @@ describe("notify-discord resolveWebhook (modular self-host fallback)", () => {
 
   it("a mapped repo uses its own per-channel secret", async () => {
     const calls = stubFetch();
-    await notify(withEnv({ LOOPOVER_DISCORD_WEBHOOK: HOOK }), "JSONbored/gittensory");
+    await notify(withEnv({ LOOPOVER_DISCORD_WEBHOOK: HOOK }), "JSONbored/loopover");
     expect(calls).toEqual([HOOK]);
   });
 
@@ -116,7 +116,7 @@ describe("notify-discord resolveWebhook (modular self-host fallback)", () => {
   it("an invalid mapped repo secret suppresses instead of falling back to the global channel", async () => {
     const calls = stubFetch();
     const env = withEnv({ LOOPOVER_DISCORD_WEBHOOK: "https://example.com/not-discord", DISCORD_WEBHOOK_URL: FALLBACK });
-    await notify(env, "JSONbored/gittensory");
+    await notify(env, "JSONbored/loopover");
     expect(calls).toEqual([]);
     expect(await externalNotificationAudit(env, "discord")).toEqual([expect.objectContaining({ outcome: "denied", detail: "invalid_repo_webhook" })]);
   });

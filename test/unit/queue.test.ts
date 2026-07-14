@@ -576,10 +576,10 @@ describe("queue processors", () => {
 
   it("runs the review recap job through the queue processor when reviewRecap.enabled is true (#1963)", async () => {
     const env = Object.assign(createTestEnv(), { LOOPOVER_DISCORD_WEBHOOK: "https://discord.com/api/webhooks/123/abc" }) as Env;
-    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { reviewRecap: { enabled: true, cadenceDays: 3 } });
+    await upsertRepoFocusManifest(env, "JSONbored/loopover", { reviewRecap: { enabled: true, cadenceDays: 3 } });
     vi.stubGlobal("fetch", async () => new Response(null, { status: 204 }));
 
-    await processJob(env, { type: "generate-review-recap", requestedBy: "test", repoFullName: "JSONbored/gittensory" });
+    await processJob(env, { type: "generate-review-recap", requestedBy: "test", repoFullName: "JSONbored/loopover" });
 
     const row = await env.DB.prepare("select outcome, detail from audit_events where event_type = ? order by created_at desc limit 1").bind("review_recap_notification.discord").first();
     expect(row).toMatchObject({ outcome: "completed", detail: "sent" });
@@ -588,14 +588,14 @@ describe("queue processors", () => {
 
   it("uses the job message's explicit windowDays over the manifest's cadenceDays default (#1963, nullish fallback present side)", async () => {
     const env = Object.assign(createTestEnv(), { LOOPOVER_DISCORD_WEBHOOK: "https://discord.com/api/webhooks/123/abc" }) as Env;
-    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { reviewRecap: { enabled: true, cadenceDays: 3 } });
+    await upsertRepoFocusManifest(env, "JSONbored/loopover", { reviewRecap: { enabled: true, cadenceDays: 3 } });
     let capturedBody: string | undefined;
     vi.stubGlobal("fetch", async (_url: RequestInfo | URL, init?: RequestInit) => {
       capturedBody = String(init?.body ?? "");
       return new Response(null, { status: 204 });
     });
 
-    await processJob(env, { type: "generate-review-recap", requestedBy: "test", repoFullName: "JSONbored/gittensory", windowDays: 21 });
+    await processJob(env, { type: "generate-review-recap", requestedBy: "test", repoFullName: "JSONbored/loopover", windowDays: 21 });
 
     expect(capturedBody).toContain("(21d)");
     vi.unstubAllGlobals();
