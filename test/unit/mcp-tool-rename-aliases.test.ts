@@ -18,7 +18,7 @@ let transport: StdioClientTransport;
 let configDir: string;
 
 async function connect(apiUrl: string) {
-  configDir = mkdtempSync(join(tmpdir(), "gittensory-rename-alias-"));
+  configDir = mkdtempSync(join(tmpdir(), "loopover-rename-alias-"));
   transport = new StdioClientTransport({
     command: "node",
     args: [bin, "--stdio"],
@@ -63,7 +63,7 @@ describe("MCP legacy alias retirement (#4777) — discovery invariants", () => {
     }
   });
 
-  it("`gittensory-mcp tools --json` reports the same 37-tool count the live server registers", async () => {
+  it("`loopover-mcp tools --json` reports the same 37-tool count the live server registers", async () => {
     const { tools } = await client.listTools();
     const payload = JSON.parse(run(["tools", "--json"])) as { count: number; tools: Array<{ name: string }> };
     expect(payload.count).toBe(tools.length);

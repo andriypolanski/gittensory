@@ -41,7 +41,7 @@ describe("miner MCP tool documentation parity (#5162)", () => {
     expect(mcpSection).toContain("payload_json");
   });
 
-  it("relates AMS's local MCP tools to the hosted gittensory-mcp tools", () => {
+  it("relates AMS's local MCP tools to the hosted loopover-mcp tools", () => {
     const readme = readFileSync(README_PATH, "utf8");
     const mcpSection = readme.slice(readme.indexOf("## MCP server"), readme.indexOf("## Version check"));
     expect(mcpSection).toContain("local SQLite");

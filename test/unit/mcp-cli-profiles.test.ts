@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { closeFixtureServer, run, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
 import mcpPackageJson from "../../packages/loopover-mcp/package.json";
 
-describe("gittensory-mcp CLI — profiles", () => {
+describe("loopover-mcp CLI — profiles", () => {
   let tempDir: string | null = null;
 
   afterEach(async () => {
@@ -16,7 +16,7 @@ describe("gittensory-mcp CLI — profiles", () => {
   });
 
   it("stores, switches, and reports named MCP profiles without mixing sessions", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
     const url = await startFixtureServer({
       onApiRequest: (request) => requests.push({ url: request.url, authorization: request.headers.authorization }),
@@ -54,11 +54,11 @@ describe("gittensory-mcp CLI — profiles", () => {
         expect.objectContaining({ url: "/v1/auth/session", authorization: "Bearer session-okto" }),
       ]),
     );
-    expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
+    expect(JSON.stringify(list)).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|loopover-cli-/);
   }, 45_000);
 
   it("profile list --format ndjson streams one JSON object per profile (and --json stays pretty)", () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const configPath = join(tempDir, "config.json");
     // Two credential-free profiles (default + active "beta"); profile list needs only names to enumerate,
     // so the fixture carries no session token — the streaming format is what this exercises.
@@ -94,7 +94,7 @@ describe("gittensory-mcp CLI — profiles", () => {
   });
 
   it("keeps environment tokens ahead of active profile sessions", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
     const url = await startFixtureServer({
       onApiRequest: (request) => requests.push({ url: request.url, authorization: request.headers.authorization }),
@@ -116,7 +116,7 @@ describe("gittensory-mcp CLI — profiles", () => {
   });
 
   it("removes the default profile without rehydrating its legacy session token", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const configPath = join(tempDir, "config.json");
     writeFileSync(
       configPath,
@@ -148,7 +148,7 @@ describe("gittensory-mcp CLI — profiles", () => {
   });
 
   it("logs out only the selected profile and reports missing profiles safely", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const requests: Array<{ url: string | undefined; authorization: string | undefined }> = [];
     const url = await startFixtureServer({
       onApiRequest: (request) => requests.push({ url: request.url, authorization: request.headers.authorization }),
@@ -179,11 +179,11 @@ describe("gittensory-mcp CLI — profiles", () => {
     expect(doctor.profile).toMatchObject({ name: "missing", configured: false });
     expect(doctor.checks).toEqual(expect.arrayContaining([expect.objectContaining({ name: "auth", status: "fail" })]));
     expect(requests).toEqual(expect.arrayContaining([expect.objectContaining({ url: "/v1/auth/logout", authorization: "Bearer session-jsonbored" })]));
-    expect(JSON.stringify({ logout, list, missingStatus, doctor })).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|gittensory-cli-/);
+    expect(JSON.stringify({ logout, list, missingStatus, doctor })).not.toMatch(/session-jsonbored|session-okto|github-jsonbored|github-okto|loopover-cli-/);
   }, 45_000);
 
   it("reports package status and prints the packaged changelog", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const url = await startFixtureServer();
     const status = JSON.parse(
       await runAsync(["status", "--json"], {
@@ -204,7 +204,7 @@ describe("gittensory-mcp CLI — profiles", () => {
   });
 
   it("sends redacted MCP package telemetry headers to the API", async () => {
-    tempDir = mkdtempSync(join(tmpdir(), "gittensory-cli-"));
+    tempDir = mkdtempSync(join(tmpdir(), "loopover-cli-"));
     const requests: Array<{ url: string | undefined; headers: IncomingMessage["headers"] }> = [];
     const url = await startFixtureServer({ onApiRequest: (request) => requests.push({ url: request.url, headers: request.headers }) });
 

@@ -77,13 +77,13 @@ function packedCliSmoke() {
     if (run("npm", ["--prefix", temp, "install", tarball]).status !== 0) {
       return { ok: false, code: "cli_smoke_failed", message: "Installing the packed tarball into a temp project failed." };
     }
-    const binName = onWindows ? "gittensory-mcp.cmd" : "gittensory-mcp";
+    const binName = onWindows ? "loopover-mcp.cmd" : "loopover-mcp";
     const bin = join(temp, "node_modules", ".bin", binName);
     const smoke = run(bin, ["--help"]);
     if (smoke.status !== 0) {
-      return { ok: false, code: "cli_smoke_failed", message: "Packed gittensory-mcp --help did not exit cleanly." };
+      return { ok: false, code: "cli_smoke_failed", message: "Packed loopover-mcp --help did not exit cleanly." };
     }
-    return { ok: true, code: "cli_smoke_ok", message: "Packed gittensory-mcp --help runs cleanly from the installed tarball." };
+    return { ok: true, code: "cli_smoke_ok", message: "Packed loopover-mcp --help runs cleanly from the installed tarball." };
   } finally {
     if (temp) rmSync(temp, { recursive: true, force: true });
     rmSync(tarball, { force: true });

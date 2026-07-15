@@ -2,7 +2,7 @@ import { rmSync } from "node:fs";
 import { afterEach, describe, expect, it } from "vitest";
 import { closeFixtureServer, createPacketRepo, localBranchAnalysisFixture, runAsync, startFixtureServer } from "./support/mcp-cli-harness";
 
-describe("gittensory-mcp CLI — analyze-branch --format table", () => {
+describe("loopover-mcp CLI — analyze-branch --format table", () => {
   let tempDir: string | null = null;
 
   afterEach(async () => {

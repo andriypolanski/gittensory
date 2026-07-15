@@ -16,7 +16,7 @@ let apiUrl: string;
 let capturedRequests: Array<{ url: string; method: string }>;
 
 async function connect() {
-  configDir = mkdtempSync(join(tmpdir(), "gittensory-maintainer-noise-"));
+  configDir = mkdtempSync(join(tmpdir(), "loopover-maintainer-noise-"));
   capturedRequests = [];
   apiUrl = await startFixtureServer({
     onApiRequest: (request) => {
@@ -72,7 +72,7 @@ describe("loopover_get_maintainer_noise stdio proxy", () => {
     expect(text).toContain("medium");
   });
 
-  it("lists the tool via gittensory-mcp tools", () => {
+  it("lists the tool via loopover-mcp tools", () => {
     const payload = JSON.parse(run(["tools", "--json"])) as {
       tools: Array<{ name: string; description: string }>;
     };
