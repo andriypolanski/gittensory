@@ -3,7 +3,7 @@ import { sentry } from "@sentry/hono/cloudflare";
 import { z } from "zod";
 import { parsePositiveInt } from "../utils/json";
 import { analyzePRQueue, type AuthorRole, type ChecksStatus } from "../queue-intelligence";
-import { completeGitHubWebOAuth, createSessionFromGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../auth/github-oauth";
+import { completeGitHubWebOAuth, createSessionFromGitHubToken, getLiveSessionGitHubToken, pollGitHubDeviceFlow, startGitHubDeviceFlow, startGitHubWebOAuth } from "../auth/github-oauth";
 import { enforceRateLimit, routeClassForPath } from "../auth/rate-limit";
 import { handleShot } from "../review/visual/shot";
 import { isScreenshotsEnabled } from "../review/visual-wire";
@@ -113,7 +113,6 @@ import {
   deleteRepositoryLinearKey,
   getGlobalAgentFrozenState,
   setGlobalAgentFrozen,
-  getDecryptedSessionGitHubToken,
 } from "../db/repositories";
 import { dedupeSignalSnapshots, pruneExpiredRecords, RETENTION_POLICY } from "../db/retention";
 import {
@@ -1210,15 +1209,16 @@ export function createApp() {
     return c.json(await buildSessionResponse(c.env, identity));
   });
 
-  // #6114: fetch the calling session's live GitHub token (persisted at login) so a CLI/AMS process can
-  // authenticate git operations without a separately-configured GITHUB_TOKEN PAT. Session-only (mirrors
+  // #6114/#6115: fetch the calling session's live GitHub token (persisted at login, transparently refreshed
+  // near/past its 8h expiry via getLiveSessionGitHubToken) so a CLI/AMS process can authenticate git
+  // operations without a separately-configured GITHUB_TOKEN PAT. Session-only (mirrors
   // /v1/auth/extension/session's identity gate below) -- the static "mcp"/"api" shared-secret identities
   // never reach this, since they don't represent one logged-in GitHub user's own credential. Never cached
   // (this is live credential material) and never included in product-usage metadata or audit events.
   app.post("/v1/auth/github/token", async (c) => {
     const identity = await authenticateRequestIdentity(c);
     if (!identity || identity.kind !== "session") return c.json({ error: "browser_session_required" }, 403);
-    const token = await getDecryptedSessionGitHubToken(c.env, identity.session.id);
+    const token = await getLiveSessionGitHubToken(c.env, identity.session.id);
     c.header("Cache-Control", "no-store");
     if (!token) return c.json({ error: "github_token_unavailable" }, 404);
     await recordRouteProductUsage(c, { surface: "api", eventName: "github_token_fetched", actor: identity.actor, outcome: "success" });

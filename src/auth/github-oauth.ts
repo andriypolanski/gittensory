@@ -4,7 +4,7 @@ import {
   createSessionForGitHubUser,
   timingSafeEqual,
 } from "./security";
-import { recordAuditEvent } from "../db/repositories";
+import { getDecryptedSessionGitHubTokenBundle, recordAuditEvent, storeSessionGitHubToken } from "../db/repositories";
 import { timeoutFetch } from "../github/client";
 import type { JsonValue } from "../types";
 
@@ -16,8 +16,12 @@ type GitHubDeviceCodeResponse = {
   interval?: number;
 };
 
+// `expires_in`/`refresh_token`/`refresh_token_expires_in` (#6115) are only present when the App owner has
+// user-to-server token expiration enabled -- the default for a GitHub App unless explicitly opted out
+// (GitHub's own docs: "Refreshing user access tokens"). Absent when expiration is disabled, so every reader
+// of these fields must treat them as optional, not assume presence.
 type GitHubAccessTokenResponse =
-  | { access_token: string; token_type?: string; scope?: string }
+  | { access_token: string; token_type?: string; scope?: string; expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number }
   | { error: string; error_description?: string };
 
 type GitHubUserResponse = {
@@ -90,10 +94,13 @@ export async function pollGitHubDeviceFlow(env: Env, deviceCode: string) {
     };
   }
   if (!tokenPayload.access_token) throw new Error("github_access_token_missing");
-  return createSessionFromGitHubToken(env, tokenPayload.access_token, {
-    source: "github_device_flow",
-    scopes: parseScopes(tokenPayload.scope),
-  });
+  const lifecycle = tokenLifecycleFromResponse(tokenPayload);
+  return createSessionFromGitHubToken(
+    env,
+    tokenPayload.access_token,
+    { source: "github_device_flow", scopes: parseScopes(tokenPayload.scope) },
+    { tokenExpiresAt: lifecycle.expiresAt, refreshToken: lifecycle.refreshToken, refreshTokenExpiresAt: lifecycle.refreshExpiresAt },
+  );
 }
 
 export async function startGitHubWebOAuth(
@@ -149,11 +156,13 @@ export async function completeGitHubWebOAuth(
     throw new Error("error" in tokenPayload ? (tokenPayload.error_description ?? tokenPayload.error) : "github_oauth_token_exchange_failed");
   }
   if (!tokenPayload.access_token) throw new Error("github_access_token_missing");
-  const session = await createSessionFromGitHubToken(env, tokenPayload.access_token, {
-    source: "github_web_oauth",
-    stateNonce: state.nonce,
-    scopes: parseScopes(tokenPayload.scope),
-  });
+  const lifecycle = tokenLifecycleFromResponse(tokenPayload);
+  const session = await createSessionFromGitHubToken(
+    env,
+    tokenPayload.access_token,
+    { source: "github_web_oauth", stateNonce: state.nonce, scopes: parseScopes(tokenPayload.scope) },
+    { tokenExpiresAt: lifecycle.expiresAt, refreshToken: lifecycle.refreshToken, refreshTokenExpiresAt: lifecycle.refreshExpiresAt },
+  );
   await recordAuditEvent(env, {
     eventType: "auth.github_web_callback",
     actor: session.login,
@@ -166,7 +175,10 @@ export async function createSessionFromGitHubToken(
   env: Env,
   githubToken: string,
   metadata: Record<string, JsonValue> = {},
-  options: { verifyAppAudience?: boolean } = {},
+  // `tokenExpiresAt`/`refreshToken`/`refreshTokenExpiresAt` (#6115): only known when the caller (the device/web
+  // OAuth flows below) minted `githubToken` itself via our own exchange -- absent for a caller-supplied token
+  // (the /v1/auth/github/session route), which has no lifecycle info to offer.
+  options: { verifyAppAudience?: boolean; tokenExpiresAt?: string | null; refreshToken?: string | null; refreshTokenExpiresAt?: string | null } = {},
 ): Promise<{ token: string; login: string; expiresAt: string; scopes: string[] }> {
   // A caller-supplied token (the github_token_exchange route) carries no proof it was minted for THIS
   // OAuth app. Without an audience check, any token a victim issued to an unrelated app would mint a
@@ -200,7 +212,14 @@ export async function createSessionFromGitHubToken(
   const githubUser = user.id === undefined ? { login: user.login } : { login: user.login, id: user.id };
   // #6114: the caller already just used `githubToken` for the identity check above -- pass it through so
   // it's persisted for later AMS git-operation use, instead of discarding it once identity is confirmed.
-  const { token, session } = await createSessionForGitHubUser(env, githubUser, { scopes, metadata, githubToken });
+  const { token, session } = await createSessionForGitHubUser(env, githubUser, {
+    scopes,
+    metadata,
+    githubToken,
+    githubTokenExpiresAt: options.tokenExpiresAt,
+    githubRefreshToken: options.refreshToken,
+    githubRefreshTokenExpiresAt: options.refreshTokenExpiresAt,
+  });
   return { token, login: session.login, expiresAt: session.expiresAt, scopes: session.scopes };
 }
 
@@ -230,6 +249,93 @@ function parseScopes(scopeHeader: string | undefined): string[] {
     .split(/[,\s]+/)
     .map((scope) => scope.trim())
     .filter(Boolean);
+}
+
+// #6115: turn a raw GitHub token-exchange response's expires_in/refresh_token/refresh_token_expires_in
+// (relative seconds-from-now, when present at all) into the absolute ISO timestamps this codebase's own
+// convention stores everywhere else (mirrors src/orb/broker.ts's own minted.expiresAt shape).
+function tokenLifecycleFromResponse(payload: { expires_in?: number; refresh_token?: string; refresh_token_expires_in?: number }): {
+  expiresAt: string | null;
+  refreshToken: string | null;
+  refreshExpiresAt: string | null;
+} {
+  return {
+    expiresAt: typeof payload.expires_in === "number" ? new Date(Date.now() + payload.expires_in * 1000).toISOString() : null,
+    refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : null,
+    refreshExpiresAt: typeof payload.refresh_token_expires_in === "number" ? new Date(Date.now() + payload.refresh_token_expires_in * 1000).toISOString() : null,
+  };
+}
+
+// A stored access token is refreshed once it has less than this much time left, not right at the edge --
+// AMS's own token-resolution (#6116) fetches once per process start and caches in memory for that process's
+// lifetime, so a request landing with only seconds of headroom would otherwise fail mid-use. Generous relative
+// to the 8h default lifetime; the cost is at most one extra GitHub round-trip per near-expiry fetch.
+const GITHUB_TOKEN_REFRESH_MARGIN_MS = 15 * 60_000;
+
+/**
+ * Resolve a currently-LIVE GitHub token for a session, transparently refreshing via the stored refresh_token
+ * when the access token is near/past expiry (#6115). Falls back to the (possibly stale) access token as-is
+ * when there's no expiry on record (a #6114-era row, or an exchange that never returned expires_in -- treated
+ * as "never expires" for backward compatibility) or no refresh_token is available. Returns null when nothing
+ * usable remains: no token was ever stored, decryption fails, the refresh token itself is expired, or the
+ * refresh attempt fails and a concurrent request's own refresh (rotating the SAME refresh token, per GitHub's
+ * one-time-use-then-rotate contract) hasn't landed either -- callers already treat a null token as
+ * "unavailable, fall back to a manual PAT."
+ */
+export async function getLiveSessionGitHubToken(env: Env, sessionId: string): Promise<string | null> {
+  const bundle = await getDecryptedSessionGitHubTokenBundle(env, sessionId);
+  if (!bundle) return null;
+
+  const expiresAtMs = bundle.expiresAt ? Date.parse(bundle.expiresAt) : NaN;
+  const hasKnownExpiry = Number.isFinite(expiresAtMs);
+  if (!hasKnownExpiry || expiresAtMs - Date.now() >= GITHUB_TOKEN_REFRESH_MARGIN_MS) return bundle.accessToken;
+
+  if (!bundle.refreshToken) return bundle.accessToken; // near/past expiry, but nothing to refresh WITH -- best effort.
+  const refreshExpiresAtMs = bundle.refreshExpiresAt ? Date.parse(bundle.refreshExpiresAt) : NaN;
+  if (Number.isFinite(refreshExpiresAtMs) && refreshExpiresAtMs <= Date.now()) return null; // dead end: re-login required.
+
+  try {
+    const refreshed = await refreshGitHubUserToken(env, bundle.refreshToken);
+    await storeSessionGitHubToken(env, sessionId, refreshed.accessToken, {
+      expiresAt: refreshed.expiresAt,
+      refreshToken: refreshed.refreshToken,
+      refreshExpiresAt: refreshed.refreshExpiresAt,
+    });
+    return refreshed.accessToken;
+  } catch {
+    // The refresh token GitHub issues is single-use-then-rotated: a concurrent request racing this one may
+    // have already refreshed (consuming the same refresh token this attempt just failed with). Re-read once
+    // rather than fail outright -- if the OTHER request's refresh already landed, its result is exactly as
+    // usable as if this call had won the race itself.
+    const retried = await getDecryptedSessionGitHubTokenBundle(env, sessionId);
+    return retried && retried.accessToken !== bundle.accessToken ? retried.accessToken : null;
+  }
+}
+
+/** Exchange a session's stored refresh_token for a fresh access token (#6115). Mirrors the initial
+ *  code/device-code exchanges below -- same endpoint, `grant_type: "refresh_token"` instead. */
+async function refreshGitHubUserToken(
+  env: Env,
+  refreshToken: string,
+): Promise<{ accessToken: string; expiresAt: string | null; refreshToken: string | null; refreshExpiresAt: string | null }> {
+  if (!env.GITHUB_OAUTH_CLIENT_ID || !env.GITHUB_OAUTH_CLIENT_SECRET) throw new Error("github_oauth_not_configured");
+  const response = await timeoutFetch("https://github.com/login/oauth/access_token", {
+    method: "POST",
+    headers: {
+      accept: "application/json",
+      "content-type": "application/json",
+      "user-agent": "loopover-api",
+    },
+    body: JSON.stringify({
+      client_id: env.GITHUB_OAUTH_CLIENT_ID,
+      client_secret: env.GITHUB_OAUTH_CLIENT_SECRET,
+      grant_type: "refresh_token",
+      refresh_token: refreshToken,
+    }),
+  });
+  const payload = (await response.json().catch(() => ({}))) as GitHubAccessTokenResponse;
+  if (!response.ok || "error" in payload || !payload.access_token) throw new Error("github_refresh_failed");
+  return { accessToken: payload.access_token, ...tokenLifecycleFromResponse(payload) };
 }
 
 function githubOAuthCallbackUrl(env: Env, requestUrl: string): string {

@@ -1839,33 +1839,55 @@ export async function revokeAuthSession(env: Env, sessionId: string): Promise<vo
 // encryptSecret/decryptSecret) -- never serialized by the session/auth GET surfaces, only ever readable via
 // getDecryptedSessionGitHubToken.
 
+export type SessionGitHubTokenLifecycle = { expiresAt?: string | null | undefined; refreshToken?: string | null | undefined; refreshExpiresAt?: string | null | undefined };
+
 /**
  * Persist a session's live GitHub token, encrypted at rest. Best-effort: unlike the BYOK/Linear key stores,
  * this must never block session creation (ORB/MCP login must keep working even when a self-hoster hasn't
  * configured TOKEN_ENCRYPTION_SECRET) -- absence of the key is warned about, not thrown, so the gap is
  * visible/alertable rather than silently unrecoverable (there is no "re-mint on demand" fallback for a
  * user's own OAuth token the way src/orb/broker.ts has for installation tokens).
+ *
+ * `lifecycle` (#6115) is optional: `expiresAt`/`refreshToken`/`refreshExpiresAt` are only known when the
+ * caller went through our own device/web OAuth exchange (the /v1/auth/github/session caller-supplied-token
+ * path has none of these) -- an absent `refreshToken` means only the bare access token is stored, same as
+ * the original #6114 shape. A re-store (e.g. after a refresh) OVERWRITES the prior refresh fields wholesale,
+ * not merges -- GitHub rotates the refresh token on every use, so an old one left in place would be dead
+ * weight, never a usable fallback.
  */
-export async function storeSessionGitHubToken(env: Env, sessionId: string, token: string): Promise<void> {
+export async function storeSessionGitHubToken(env: Env, sessionId: string, token: string, lifecycle: SessionGitHubTokenLifecycle = {}): Promise<void> {
   const secret = env.TOKEN_ENCRYPTION_SECRET;
   if (!secret) {
     console.warn(JSON.stringify({ level: "warn", event: "session_github_token_persist_skipped", sessionId, message: "TOKEN_ENCRYPTION_SECRET is not set; the session's GitHub token was not persisted. AMS git operations for this session will fall back to a manually-configured GITHUB_TOKEN." }));
     return;
   }
   const { ciphertext, iv, salt, version } = await encryptSecret(token, secret);
+  const refreshEncrypted = lifecycle.refreshToken ? await encryptSecret(lifecycle.refreshToken, secret) : null;
   const updatedAt = nowIso();
+  const values = {
+    sessionId,
+    ciphertext,
+    iv,
+    salt,
+    keyVersion: version,
+    expiresAt: lifecycle.expiresAt ?? null,
+    refreshCiphertext: refreshEncrypted?.ciphertext ?? null,
+    refreshIv: refreshEncrypted?.iv ?? null,
+    refreshSalt: refreshEncrypted?.salt ?? null,
+    refreshKeyVersion: refreshEncrypted?.version ?? null,
+    refreshExpiresAt: lifecycle.refreshExpiresAt ?? null,
+    updatedAt,
+  };
   const db = getDb(env.DB);
-  await db
-    .insert(authSessionGithubTokens)
-    .values({ sessionId, ciphertext, iv, salt, keyVersion: version, updatedAt })
-    .onConflictDoUpdate({ target: authSessionGithubTokens.sessionId, set: { ciphertext, iv, salt, keyVersion: version, updatedAt } });
+  await db.insert(authSessionGithubTokens).values(values).onConflictDoUpdate({ target: authSessionGithubTokens.sessionId, set: values });
 }
 
 /**
  * Decrypt a session's stored GitHub token. Returns null when no key is configured OR none was ever stored
  * (e.g. TOKEN_ENCRYPTION_SECRET was unset at login time) OR decryption fails (e.g. a rotated encryption key) --
  * so a misconfiguration or a session that predates this feature never crashes the caller, only degrades to
- * "unavailable, fall back to a manual PAT."
+ * "unavailable, fall back to a manual PAT." Ignores expiry -- callers that need a currently-LIVE token
+ * (refreshing when near/past expiry) should use getLiveSessionGitHubToken (src/auth/github-oauth.ts) instead.
  */
 export async function getDecryptedSessionGitHubToken(env: Env, sessionId: string): Promise<string | null> {
   const secret = env.TOKEN_ENCRYPTION_SECRET;
@@ -1878,6 +1900,38 @@ export async function getDecryptedSessionGitHubToken(env: Env, sessionId: string
   } catch {
     return null;
   }
+}
+
+export type SessionGitHubTokenBundle = { accessToken: string; expiresAt: string | null; refreshToken: string | null; refreshExpiresAt: string | null };
+
+/**
+ * Decrypt a session's full stored GitHub token record -- access token AND (if present) refresh token, plus
+ * both expiries -- for getLiveSessionGitHubToken's (#6115) refresh-when-near-expiry decision. Returns null on
+ * the same fail-safe conditions as getDecryptedSessionGitHubToken (no key, no row, decrypt failure). A stored
+ * refresh ciphertext that fails to decrypt independently degrades to `refreshToken: null` rather than failing
+ * the whole bundle -- the access token half may still be perfectly usable even if the refresh half is corrupt.
+ */
+export async function getDecryptedSessionGitHubTokenBundle(env: Env, sessionId: string): Promise<SessionGitHubTokenBundle | null> {
+  const secret = env.TOKEN_ENCRYPTION_SECRET;
+  if (!secret) return null;
+  const db = getDb(env.DB);
+  const [row] = await db.select().from(authSessionGithubTokens).where(eq(authSessionGithubTokens.sessionId, sessionId)).limit(1);
+  if (!row) return null;
+  let accessToken: string;
+  try {
+    accessToken = await decryptSecret(row.ciphertext, row.iv, secret, row.salt);
+  } catch {
+    return null;
+  }
+  let refreshToken: string | null = null;
+  if (row.refreshCiphertext && row.refreshIv) {
+    try {
+      refreshToken = await decryptSecret(row.refreshCiphertext, row.refreshIv, secret, row.refreshSalt);
+    } catch {
+      refreshToken = null;
+    }
+  }
+  return { accessToken, expiresAt: row.expiresAt, refreshToken, refreshExpiresAt: row.refreshExpiresAt };
 }
 
 /** Delete a session's stored GitHub token. Called from revokeAuthSession so logout/revocation removes the

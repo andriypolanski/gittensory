@@ -1159,6 +1159,16 @@ export const authSessionGithubTokens = sqliteTable("auth_session_github_tokens",
   iv: text("iv").notNull(),
   salt: text("salt"),
   keyVersion: integer("key_version").notNull().default(2),
+  // Access-token expiry + an optional refresh token (#6115) -- both nullable: a #6114-era row predates this
+  // migration, and even a fresh row may lack a refresh token if the specific exchange never returned one (see
+  // migrations/0154's own header). getLiveSessionGitHubToken (src/auth/github-oauth.ts) treats a null
+  // expiresAt as "never expires" for backward compatibility with those rows.
+  expiresAt: text("expires_at"),
+  refreshCiphertext: text("refresh_ciphertext"),
+  refreshIv: text("refresh_iv"),
+  refreshSalt: text("refresh_salt"),
+  refreshKeyVersion: integer("refresh_key_version"),
+  refreshExpiresAt: text("refresh_expires_at"),
   createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
   updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
 });

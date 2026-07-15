@@ -233,7 +233,16 @@ export async function createSessionForGitHubUser(
   // `githubToken` (#6114): the raw GitHub user-to-server token this session's login exchange minted, if any.
   // Persisted encrypted so a CLI/AMS process can fetch it later (see storeSessionGitHubToken) -- NEVER placed
   // in `metadata` (that's a plaintext JSON blob) or otherwise logged/audited alongside this session.
-  options: { scopes?: string[]; metadata?: Record<string, JsonValue>; githubToken?: string } = {},
+  // `githubTokenExpiresAt`/`githubRefreshToken`/`githubRefreshTokenExpiresAt` (#6115): only known when the
+  // login exchange went through our own device/web OAuth flow -- absent for the caller-supplied-token path.
+  options: {
+    scopes?: string[];
+    metadata?: Record<string, JsonValue>;
+    githubToken?: string;
+    githubTokenExpiresAt?: string | null | undefined;
+    githubRefreshToken?: string | null | undefined;
+    githubRefreshTokenExpiresAt?: string | null | undefined;
+  } = {},
 ): Promise<{ token: string; session: AuthSessionRecord }> {
   const token = createOpaqueToken();
   const issuedAt = nowIso();
@@ -250,7 +259,13 @@ export async function createSessionForGitHubUser(
     metadata: options.metadata ?? {},
   };
   await createAuthSession(env, session);
-  if (options.githubToken) await storeSessionGitHubToken(env, session.id, options.githubToken);
+  if (options.githubToken) {
+    await storeSessionGitHubToken(env, session.id, options.githubToken, {
+      expiresAt: options.githubTokenExpiresAt,
+      refreshToken: options.githubRefreshToken,
+      refreshExpiresAt: options.githubRefreshTokenExpiresAt,
+    });
+  }
   await recordAuditEvent(env, {
     eventType: "auth.session_created",
     actor: user.login,
