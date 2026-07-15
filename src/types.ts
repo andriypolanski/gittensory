@@ -616,7 +616,7 @@ export type GateRuleMode = "off" | "advisory" | "block";
 /** `gate.copycat.mode` (#1969) -- a dedicated 4-value enum rather than the shared {@link GateRuleMode}
  *  tri-state, since the issue's tiered response is warn -> label -> block -> strikes (where "strikes" is a
  *  separate escalation action reusing the existing cross-repo banned-contributors ledger, not a 5th mode
- *  value). See {@link RepositorySettings.copycatGateMode}'s doc comment for the currently-inert status. */
+ *  value). See {@link RepositorySettings.copycatGateMode}'s doc comment for engine-vs-call-site status. */
 export type CopycatGateMode = "off" | "warn" | "label" | "block";
 
 /** Review-check publish surface (#2852). Controls ONLY whether/how the "LoopOver Orb Review Agent" check-run
@@ -783,14 +783,15 @@ export type RepositorySettings = {
    *  for check-run detection so contributor-controlled same-name runs cannot satisfy a blocking CLA gate. */
   claCheckRunAppSlug?: string | null | undefined;
   /** Copycat/plagiarism detection (#1969). `off` (default/absent) = no check; `warn`/`label`/`block` are
-   *  escalating tiers a future containment/similarity engine would act on (`block` additionally hard-blocks;
-   *  a further "strikes" escalation reuses the existing cross-repo banned-contributors ledger once wired).
-   *  Config-as-code only — no DB column or dashboard toggle; set via `.loopover.yml gate.copycat.mode`.
-   *  CURRENTLY INERT: this field is parsed and threaded end-to-end, but no detection engine reads it yet —
-   *  see {@link CopycatGateMode}'s doc comment in packages/loopover-engine for the tracked follow-up plan. */
+   *  escalating tiers the containment engine ({@link assessCopycat} in `src/signals/copycat.ts`) would act
+   *  on (`block` additionally hard-blocks; a further "strikes" escalation reuses the existing cross-repo
+   *  banned-contributors ledger once wired). Config-as-code only — no DB column or dashboard toggle; set
+   *  via `.loopover.yml gate.copycat.mode`. CALL-SITE STILL INERT: the pure detection engine exists and is
+   *  unit-tested, but advisory/processors do not yet feed real prior-art into it or actuate label/block/
+   *  strikes — that wiring is a deferred Phase 2/3 follow-up against #1969. */
   copycatGateMode?: CopycatGateMode | undefined;
-  /** `gate.copycat.minScore`: containment/similarity score (0-100) at/above which `copycatGateMode` would act,
-   *  once the detection engine exists. `null`/absent ⇒ the engine's own default threshold. Config-as-code
+  /** `gate.copycat.minScore`: containment/similarity score (0-100) at/above which `copycatGateMode` would act
+   *  once call-site wiring lands. `null`/absent ⇒ the engine's own default threshold. Config-as-code
    *  only, alongside {@link copycatGateMode}. */
   copycatGateMinScore?: number | null | undefined;
   /** `gate.expectedCiContexts` (#selfhost-ci-verification): maintainer-declared CI check/status context names to

@@ -210,14 +210,13 @@ export type FocusManifestGateConfig = {
    *  or dashboard toggle. Deliberately a DEDICATED 4-value enum, not the shared `GateRuleMode` tri-state: the
    *  issue's tiered response is warn -> label -> block -> strikes, where "strikes" is a separate escalation
    *  action (reusing the existing cross-repo banned-contributors ledger once wired) rather than a 5th mode
-   *  value. THIS FIELD IS CURRENTLY INERT -- the similarity/containment detection engine that would actually
-   *  compute a copycat finding does not exist yet (tracked as later, separate PRs against #1969); parsing and
-   *  threading this config end-to-end first proves the plumbing and lets an operator's `.loopover.yml`
-   *  already declare intent without waiting on the detection engine. */
+   *  value. The pure containment engine now lives at `src/signals/copycat.ts` (Phase 1); CALL-SITE wiring
+   *  that feeds prior art and actuates label/block/strikes is still deferred (Phase 2/3 against #1969).
+   *  Parsing and threading this config end-to-end lets an operator's `.loopover.yml` already declare intent. */
   copycatMode: CopycatGateMode | null;
   /** `gate.copycat.minScore` (#1969): containment/similarity score (0-100) at/above which `copycatMode` acts.
-   *  null (unset) ⇒ the (also currently inert) engine's own default threshold once it exists. Same 0-100
-   *  clamp-and-round normalization as `slopMinScore`/`readinessMinScore` above. */
+   *  null (unset) ⇒ the engine's own default threshold (`DEFAULT_COPYCAT_MIN_SCORE` in `src/signals/copycat.ts`).
+   *  Same 0-100 clamp-and-round normalization as `slopMinScore`/`readinessMinScore` above. */
   copycatMinScore: number | null;
 };
 

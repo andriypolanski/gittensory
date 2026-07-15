@@ -213,12 +213,12 @@ export type RepositorySettings = {
    *  for check-run detection so contributor-controlled same-name runs cannot satisfy a blocking CLA gate. */
   claCheckRunAppSlug?: string | null | undefined;
   /** Copycat/plagiarism detection (#1969). `off` (default/absent) = no check; `warn`/`label`/`block` are
-   *  escalating tiers a future containment/similarity engine would act on. Config-as-code only — no DB column
-   *  or dashboard toggle; set via `.loopover.yml gate.copycat.mode`. CURRENTLY INERT: parsed and threaded
-   *  end-to-end, but no detection engine reads it yet. */
+   *  escalating tiers the containment engine (`src/signals/copycat.ts`) would act on. Config-as-code only —
+   *  no DB column or dashboard toggle; set via `.loopover.yml gate.copycat.mode`. CALL-SITE STILL INERT:
+   *  the pure detection engine exists (Phase 1); advisory/processors wiring is deferred Phase 2/3. */
   copycatGateMode?: "off" | "warn" | "label" | "block" | undefined;
-  /** `gate.copycat.minScore`: containment/similarity score (0-100) at/above which `copycatGateMode` would act,
-   *  once the detection engine exists. Config-as-code only, alongside {@link copycatGateMode}. */
+  /** `gate.copycat.minScore`: containment/similarity score (0-100) at/above which `copycatGateMode` would act
+   *  once call-site wiring lands. Config-as-code only, alongside {@link copycatGateMode}. */
   copycatGateMinScore?: number | null | undefined;
   /** `gate.expectedCiContexts` (#selfhost-ci-verification): maintainer-declared CI check/status context names to
    *  treat as required when GitHub branch protection returns no readable required-status-checks (unconfigured,
