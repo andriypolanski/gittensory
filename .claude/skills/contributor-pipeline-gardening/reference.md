@@ -1,5 +1,28 @@
 # Contributor pipeline gardening — reference (gittensory / loopover)
 
+## Docs architecture is mid-migration (as of 2026-07-15) — don't generate old-pattern docs issues
+
+Both loopover and metagraphed are migrating their website docs from hand-built TanStack Router
+route files (`docs.<slug>.tsx`, a full React component per page, manually-maintained nav array) to
+a shared MDX pipeline: **`fumadocs-core`/`fumadocs-mdx` (headless — not `fumadocs-ui`'s component
+shell) for content/structure/search, rendered through the existing ui-kit `<DocsPage>` primitives,
+plus Scalar (`@scalar/api-reference`) for the API playground instead of `fumadocs-openapi`** (which
+has documented compatibility issues in TanStack/Vite environments). Both apps share the identical
+`@lovable.dev/vite-tanstack-config` Vite setup, so the integration is being proven once on loopover
+(#6037, a bounded spike, `maintainer-only`) before porting to metagraphed as a shared package.
+
+**Until #6037 lands with a proven pattern:**
+- Every issue that would otherwise ask a contributor to hand-build a new `docs.*.tsx` route (in
+  either repo) should stay `maintainer-only`, or better, not be filed at all — file it (or note it
+  as a gap in the digest) but don't unlock it for contributors.
+- The AMS-docs epic #6012 and its 11 sub-issues (#6022-#6032), plus metagraphed's open "Docs page: X"
+  family (#3504/3505/3506/3507/3508/3509/3510/3511/3514/3516), were all deliberately paused this way
+  on 2026-07-15 — they carry `maintainer-only` + a comment explaining why, not because the underlying
+  work stopped being wanted. Don't "fix" this labeling in a future stale-sweep pass; check #6037's
+  state first. Once it lands, these need their Requirements sections rewritten to target an `.mdx`
+  content file instead of a hand-built route, then `maintainer-only` removed — that rewrite is real
+  work for a future run/session, not a mechanical relabel.
+
 ## Product shape (so generated issues land in the right place)
 
 Two products, self-host-first:
