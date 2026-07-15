@@ -9,7 +9,6 @@
 import {
   getGateBlockOutcome,
   getInstallation,
-  hasActiveReviewForHeadSha,
   hasReviewedForHeadSha,
   isGlobalAgentFrozen,
   recordAuditEvent,
@@ -535,14 +534,23 @@ async function hasMaintainerOrOwnerPermission(env: Env, installationId: number, 
   return permission === "admin" || permission === "maintain" || permission === "write";
 }
 
-/** Review-evasion protection (#review-evasion-protection): a CONTRIBUTOR closing their OWN PR while
- *  loopover has an ACTIVE review pass running against its current headSha is dodging the one-shot review,
- *  not making an ordinary close. GitHub lets a contributor reopen a PR they closed themselves but NOT one
- *  closed by a maintainer or the App (#one-shot-reopen) -- so this reopens the PR (as the App) and
- *  immediately re-closes it (as the App), converting the contributor's own close into an App-authored,
- *  terminal one they cannot reopen; any later reopen attempt is caught by the EXISTING
- *  maybeRecloseDisallowedReopen guard above. Per-PR actuation-locked like its draft-dodge/reopen-reclose
- *  siblings. The strike only counts once the enforcement close actually succeeds. */
+/** Review-evasion protection (#review-evasion-protection, broadened #self-close-post-review): a CONTRIBUTOR
+ *  closing their OWN PR after loopover has run a review pass against its current headSha is dodging the
+ *  one-shot review, not making an ordinary close. GitHub lets a contributor reopen a PR they closed
+ *  themselves but NOT one closed by a maintainer or the App (#one-shot-reopen) -- so this reopens the PR (as
+ *  the App) and immediately re-closes it (as the App), converting the contributor's own close into an
+ *  App-authored, terminal one they cannot reopen; any later reopen attempt is caught by the EXISTING
+ *  maybeRecloseDisallowedReopen guard above. Uses hasReviewedForHeadSha (not hasActiveReviewForHeadSha)
+ *  deliberately, mirroring the draft-conversion sibling below: the active-only window closes the instant a
+ *  review publishes, but a human reacting to a now-VISIBLE label/comment necessarily acts AFTER that -- the
+ *  narrow window could only ever catch someone self-closing blind. Unlike the draft-conversion sibling, this
+ *  guard's own enforcement action closes the PR again -- so a redelivered/retried webhook for the SAME
+ *  original close must not re-run the reopen/close dance; a live-timeline closer check (mirrors
+ *  recloseDisallowedReopenIfNeeded's own pattern) distinguishes that from a genuinely fresh self-close.
+ *  `.loopover.yml` settings.autoCloseExemptLogins (the same shared allowlist the draft-conversion/
+ *  contributor-cap/review-nag guards already honor) is an explicit escape hatch for trusted contributors.
+ *  Per-PR actuation-locked like its draft-dodge/reopen-reclose siblings. The strike only counts once the
+ *  enforcement close actually succeeds. */
 export async function maybeCloseReviewEvasionSelfClose(
   env: Env,
   deliveryId: string,
@@ -553,11 +561,11 @@ export async function maybeCloseReviewEvasionSelfClose(
   settings: RepositorySettings,
 ): Promise<void> {
   await withPrActuationLock(env, repoFullName, pr.number, "review-evasion-self-close", () =>
-    closeReviewEvasionSelfCloseIfActive(env, deliveryId, installationId, repoFullName, pr, payload, settings),
+    closeReviewEvasionSelfCloseIfReviewed(env, deliveryId, installationId, repoFullName, pr, payload, settings),
   );
 }
 
-async function closeReviewEvasionSelfCloseIfActive(
+async function closeReviewEvasionSelfCloseIfReviewed(
   env: Env,
   deliveryId: string,
   installationId: number,
@@ -573,10 +581,24 @@ async function closeReviewEvasionSelfCloseIfActive(
   // maintainer) closing someone else's PR is an ordinary maintainer action, not evasion.
   if (!closer || !authorLogin || closer !== authorLogin) return;
   if (isProtectedAutomationAuthor(pr.authorLogin)) return;
+  if (isAutoCloseExempt(pr.authorLogin, settings.autoCloseExemptLogins)) return;
   if (!pr.headSha) return;
   const headSha = pr.headSha; // captured so the allowStaleIf closure below keeps the narrowed non-null type
   if (await hasMaintainerOrOwnerPermission(env, installationId, repoFullName, authorLogin)) return;
-  if (!(await hasActiveReviewForHeadSha(env, repoFullName, pr.number, headSha))) return;
+  if (!(await hasReviewedForHeadSha(env, repoFullName, pr.number, headSha))) return;
+  // Redelivery/retry safety (#self-close-post-review): hasReviewedForHeadSha stays true for as long as the
+  // head doesn't change -- including AFTER this very guard's own enforcement already ran below (reopen+close
+  // as the App), unlike hasActiveReviewForHeadSha, which the guard's own terminalizeActiveReviewTracking call
+  // used to flip false and rely on for exactly this dedup. A genuinely fresh self-close's most recent closer
+  // on the live timeline is the CONTRIBUTOR (this webhook's own sender); once we've already enforced, the
+  // live timeline's last closer is loopover's own bot login instead. Check that BEFORE re-running the
+  // reopen/close dance so a redelivered webhook for an already-enforced close is a true no-op -- mirrors
+  // recloseDisallowedReopenIfNeeded's identical closer-inspection pattern above. An ambiguous read (errored,
+  // or a bounded scan that didn't confidently resolve to the bot) falls through to normal enforcement rather
+  // than risk silently skipping a genuine evasion attempt -- worst case a rare double-enforcement, not a miss.
+  const botLogin = `${env.GITHUB_APP_SLUG}[bot]`.toLowerCase();
+  const lastCloser = await getLastCloserLogin(env, installationId, repoFullName, pr.number);
+  if ((lastCloser.login?.toLowerCase() ?? null) === botLogin) return;
 
   const targetKey = `${repoFullName}#${pr.number}`;
   const gateMetadata = { deliveryId, repoFullName, headSha };

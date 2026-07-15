@@ -1813,6 +1813,16 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
         return Response.json({ state: url === "open" ? "open" : "closed" });
       }
       if (method === "POST" && url.endsWith("/issues/42/comments")) return Response.json({ id: 1 }, { status: 201 });
+      // getLastCloserLogin's timeline scan (#self-close-post-review redelivery-safety check): a genuinely
+      // fresh self-close's most recent "closed" event is the contributor's own. Once THIS guard's own
+      // reopen+close pair has actually happened (>=2 prior PATCH /pulls/42 calls recorded in `calls`), the
+      // live timeline's last closer becomes the bot -- mirrors what GitHub's real timeline would show after
+      // an actual reopen+re-close, letting a redelivery test assert the second delivery is a true no-op.
+      if (url.includes("/issues/42/events")) {
+        const priorPatches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42")).length;
+        const closer = priorPatches >= 2 ? "gittensory[bot]" : "contributor";
+        return Response.json([{ event: "closed", actor: { login: closer } }]);
+      }
       if (url.includes("/check-runs")) return Response.json({ id: 900 }, { status: 201 });
       if (url.includes("/labels")) return Response.json([{ name: "review-evasion" }]);
       if (url.includes("/pulls/42/files")) return Response.json([]);
@@ -1914,6 +1924,39 @@ describe("review-evasion protection (#review-evasion-protection)", () => {
       await processJob(env, { type: "github-webhook", deliveryId: "self-close-no-active-review", eventName: "pull_request", payload: closedPayload("contributor") });
 
       expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+    });
+
+    it("REGRESSION (#self-close-post-review): re-closes a self-close AFTER the review already published, not just mid-computation -- the active-only window would have missed this, since a human reacting to a now-visible label necessarily acts after the pass already terminalized", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env);
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", authorLogin: "contributor", deliveryId: "review-start-1" });
+      // The review pass concludes and publishes -- exactly what happens right before a human could ever SEE
+      // a label/comment to react to (and, in practice, before they'd bother self-closing to dodge it).
+      await repositoriesModule.terminalizeActiveReviewTracking(env, "JSONbored/gittensory", 42);
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-post-publish", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      const patches = calls.filter((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"));
+      expect(patches.length).toBeGreaterThanOrEqual(2); // reopen (state=open) then re-close (state=closed)
+      const audit = await env.DB.prepare("select outcome from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ outcome: string }>();
+      expect(audit?.outcome).toBe("completed");
+    });
+
+    it("REGRESSION (#self-close-post-review): honors settings.autoCloseExemptLogins -- the shared allowlist the draft-conversion/contributor-cap/review-nag guards already use", async () => {
+      const calls: Array<{ url: string; method: string }> = [];
+      stubEvasionFetch(calls);
+      const env = createTestEnv({ GITHUB_APP_PRIVATE_KEY: generateRsaPrivateKeyPem(), GITHUB_APP_SLUG: "gittensory" });
+      await setupEvasionRepo(env, { autoCloseExemptLogins: ["contributor"] });
+      await repositoriesModule.startActiveReviewTracking(env, { repoFullName: "JSONbored/gittensory", pullNumber: 42, headSha: "abc123", authorLogin: "contributor", deliveryId: "review-start-1" });
+      await repositoriesModule.terminalizeActiveReviewTracking(env, "JSONbored/gittensory", 42);
+
+      await processJob(env, { type: "github-webhook", deliveryId: "self-close-exempt", eventName: "pull_request", payload: closedPayload("contributor") });
+
+      expect(calls.some((c) => c.method === "PATCH" && c.url.endsWith("/pulls/42"))).toBe(false);
+      const audit = await env.DB.prepare("select count(*) as n from audit_events where event_type = ?").bind("github_app.review_evasion_closed").first<{ n: number }>();
+      expect(audit?.n).toBe(0);
     });
 
     it("does nothing when a THIRD PARTY closed someone else's PR (not the author) — an ordinary maintainer close, not self-close evasion", async () => {
