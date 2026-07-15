@@ -221,15 +221,19 @@ function isValidIpv6(value: string): boolean {
   return hasHexSegment;
 }
 
-// /v1/auth/github/token (#6114/#6115/#6117) is excluded from the broad /v1/auth/ prefix match below: unlike
-// the OAuth start/callback/device-poll flows it sits alongside, it always requires (and validates) a real
-// session bearer token to do anything useful, so it should rate-limit per SESSION like any other authenticated
+// These /v1/auth/* paths are excluded from the broad /v1/auth/ prefix match below: unlike the OAuth
+// start/callback/device-poll flows they sit alongside, each always requires (and validates) a real session
+// bearer token to do anything useful, so they should rate-limit per SESSION like any other authenticated
 // route -- not per IP, which would let a caller with a stolen session token bypass the strict 10/min cap by
 // rotating source IPs, and would let unrelated sessions behind one NAT (a shared office network, CI infra)
 // throttle each other.
+//   /v1/auth/github/token (#6114/#6115/#6117): fetches the session's live GitHub token.
+//   /v1/auth/extension/session (#556): mints a new extension-scoped session from an existing one.
+const SESSION_AUTHENTICATED_AUTH_PATHS = new Set(["/v1/auth/github/token", "/v1/auth/extension/session"]);
+
 function isPreAuthRateLimitPath(path: string): boolean {
   return (
     (path === "/health" || path === "/v1/mcp/compatibility" || path === "/openapi.json" || path === "/mcp" || path.startsWith("/v1/auth/") || path === "/v1/github/webhook") &&
-    path !== "/v1/auth/github/token"
+    !SESSION_AUTHENTICATED_AUTH_PATHS.has(path)
   );
 }
