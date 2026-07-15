@@ -135,6 +135,8 @@ export const SETTINGS_ALIAS_MANIFEST = [
   { field: "aiReviewOnMerge", aliases: ["onMerge"] },
   { field: "aiReviewReviewers", aliases: ["reviewers:"] },
   { field: "requireFreshRebaseWindowMinutes", aliases: ["requireFreshRebaseWindow"] },
+  { field: "sizeGateMaxFiles", aliases: ["maxFiles"] },
+  { field: "sizeGateMaxLines", aliases: ["maxLines"] },
 ];
 
 /** camelCase -> snake_case, matching the casing convention `.loopover.yml`'s `review:` block (and everything

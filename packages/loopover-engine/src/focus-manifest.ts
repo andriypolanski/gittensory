@@ -102,6 +102,8 @@ export type FocusManifestGateConfig = {
   slopMinScore: number | null;
   slopAiAdvisory: boolean | null;
   sizeMode: GateRuleMode | null;
+  sizeMaxFiles: number | null;
+  sizeMaxLines: number | null;
   /** `gate.lockfileIntegrity` (#2563): off|advisory|block, off by default. When not off, a changed
    *  `package-lock.json` diff is scanned for a `resolved`/`integrity` change unaccompanied by a matching
    *  `package.json` version bump, or a `resolved` URL outside `registry.npmjs.org` — a `lockfile_tamper_risk`
@@ -982,6 +984,8 @@ const EMPTY_GATE_CONFIG: FocusManifestGateConfig = {
   slopMinScore: null,
   slopAiAdvisory: null,
   sizeMode: null,
+  sizeMaxFiles: null,
+  sizeMaxLines: null,
   lockfileIntegrityMode: null,
   aiReviewMode: null,
   aiReviewByok: null,
@@ -1385,6 +1389,8 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     slopMinScore: normalizeOptionalScore(slopRecord?.minScore, "gate.slop.minScore", warnings),
     slopAiAdvisory: normalizeOptionalBoolean(slopRecord?.aiAdvisory, "gate.slop.aiAdvisory", warnings),
     sizeMode: normalizeOptionalGateMode(sizeRecord?.mode, "gate.size.mode", warnings),
+    sizeMaxFiles: normalizeOptionalPositiveInteger(sizeRecord?.maxFiles, "gate.size.maxFiles", warnings),
+    sizeMaxLines: normalizeOptionalPositiveInteger(sizeRecord?.maxLines, "gate.size.maxLines", warnings),
     lockfileIntegrityMode: normalizeOptionalGateMode(record.lockfileIntegrity, "gate.lockfileIntegrity", warnings),
     aiReviewMode: normalizeOptionalGateMode(aiReviewRecord?.mode, "gate.aiReview.mode", warnings),
     aiReviewByok: normalizeOptionalBoolean(aiReviewRecord?.byok, "gate.aiReview.byok", warnings),
@@ -1451,6 +1457,8 @@ function parseGateConfig(value: JsonValue | undefined, warnings: string[]): Focu
     gate.slopMinScore !== null ||
     gate.slopAiAdvisory !== null ||
     gate.sizeMode !== null ||
+    gate.sizeMaxFiles !== null ||
+    gate.sizeMaxLines !== null ||
     gate.lockfileIntegrityMode !== null ||
     gate.aiReviewMode !== null ||
     gate.aiReviewByok !== null ||
@@ -1500,7 +1508,13 @@ export function gateConfigToJson(gate: FocusManifestGateConfig): JsonValue {
     if (gate.readinessMinScore !== null) readiness.minScore = gate.readinessMinScore;
     out.readiness = readiness;
   }
-  if (gate.sizeMode !== null) out.size = { mode: gate.sizeMode };
+  if (gate.sizeMode !== null || gate.sizeMaxFiles !== null || gate.sizeMaxLines !== null) {
+    const size: Record<string, JsonValue> = {};
+    if (gate.sizeMode !== null) size.mode = gate.sizeMode;
+    if (gate.sizeMaxFiles !== null) size.maxFiles = gate.sizeMaxFiles;
+    if (gate.sizeMaxLines !== null) size.maxLines = gate.sizeMaxLines;
+    out.size = size;
+  }
   if (gate.lockfileIntegrityMode !== null) out.lockfileIntegrity = gate.lockfileIntegrityMode;
   if (gate.slopMode !== null || gate.slopMinScore !== null || gate.slopAiAdvisory !== null) {
     const slop: Record<string, JsonValue> = {};

@@ -292,6 +292,8 @@ export type FocusManifestGateConfig = {
   slopMinScore: number | null;
   slopAiAdvisory: boolean | null;
   sizeMode: GateRuleMode | null;
+  sizeMaxFiles: number | null;
+  sizeMaxLines: number | null;
   lockfileIntegrityMode: GateRuleMode | null;
   aiReviewMode: GateRuleMode | null;
   aiReviewByok: boolean | null;

@@ -99,10 +99,12 @@ export function gateCheckPolicy(
     slopGateMinScore: settings.slopGateMinScore ?? null,
     slopRisk: slopRisk ?? null,
     confirmedContributor: confirmedContributorForPack,
-    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): the MODE comes from config; the
-    // thresholds default to 10 files / 1000 lines (advisory.ts constants); the live counts + guardrail-hit come from
-    // the per-PR sizeContext threaded by the caller.
+    // PR-size + guardrail manual-review HOLD (#gate-size / #gate-guardrail): the mode AND thresholds come from
+    // config (`gate.size.mode`/`maxFiles`/`maxLines`), falling back to advisory.ts's 10-file/1000-line constants
+    // when unset; the live counts + guardrail-hit come from the per-PR sizeContext threaded by the caller.
     sizeGateMode: settings.sizeGateMode,
+    sizeGateMaxFiles: settings.sizeGateMaxFiles ?? null,
+    sizeGateMaxLines: settings.sizeGateMaxLines ?? null,
     lockfileIntegrityGateMode: settings.lockfileIntegrityGateMode,
     changedFileCount: sizeContext?.changedFileCount ?? null,
     changedLineCount: sizeContext?.changedLineCount ?? null,

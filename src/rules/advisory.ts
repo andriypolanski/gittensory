@@ -112,8 +112,13 @@ export type GateCheckPolicy = {
   /** PR-size HOLD (#gate-size). When set (advisory/block), a PR with >= sizeGateMaxFiles changed files OR
    *  >= sizeGateMaxLines changed (added+deleted) lines that would OTHERWISE pass is HELD for manual review — a
    *  neutral gate → "manual" verdict, never auto-merged and never a hard failure. Defaults off; thresholds default
-   *  to 10 files / 1000 lines. This is a HOLD (advisory dry-run friendly), not a close. */
+   *  to 10 files / 1000 lines when sizeGateMaxFiles/sizeGateMaxLines are unset. This is a HOLD (advisory dry-run
+   *  friendly), not a close. */
   sizeGateMode?: GateRuleMode | undefined;
+  /** PR-size HOLD file-count threshold (#gate-size). `null`/undefined ⇒ the 10-file default. */
+  sizeGateMaxFiles?: number | null | undefined;
+  /** PR-size HOLD changed-line-count threshold (#gate-size). `null`/undefined ⇒ the 1000-line default. */
+  sizeGateMaxLines?: number | null | undefined;
   /** Lockfile-tamper-risk gate (#2563). When `block`, a `lockfile_tamper_risk` finding (produced by
    *  review/lockfile-tamper.ts when a changed package-lock.json's resolved/integrity value changed without a
    *  matching package.json version bump, or points off the npm registry) becomes a hard blocker. Defaults to
@@ -517,16 +522,14 @@ function buildSizeHoldFinding(policy: GateCheckPolicy): AdvisoryFinding | null {
   if (!policy.sizeGateMode || policy.sizeGateMode === "off") return null;
   const files = policy.changedFileCount ?? 0;
   const lines = policy.changedLineCount ?? 0;
-  if (
-    files < SIZE_HOLD_DEFAULT_MAX_FILES &&
-    lines < SIZE_HOLD_DEFAULT_MAX_LINES
-  )
-    return null;
+  const maxFiles = policy.sizeGateMaxFiles ?? SIZE_HOLD_DEFAULT_MAX_FILES;
+  const maxLines = policy.sizeGateMaxLines ?? SIZE_HOLD_DEFAULT_MAX_LINES;
+  if (files < maxFiles && lines < maxLines) return null;
   return {
     code: "oversized_pr",
     severity: "warning",
     title: "Large change — held for manual review",
-    detail: `This PR changes ${files} file(s) / ${lines} line(s) (hold threshold: ${SIZE_HOLD_DEFAULT_MAX_FILES} files or ${SIZE_HOLD_DEFAULT_MAX_LINES} lines).`,
+    detail: `This PR changes ${files} file(s) / ${lines} line(s) (hold threshold: ${maxFiles} files or ${maxLines} lines).`,
     action: "Split this into smaller, focused PRs, or a maintainer reviews and merges it manually.",
   };
 }

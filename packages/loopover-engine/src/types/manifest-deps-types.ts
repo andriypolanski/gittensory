@@ -185,9 +185,16 @@ export type RepositorySettings = {
    *  only, applies to every author like every blocker). Default `off` — opt-in via .loopover.yml. */
   slopGateMode: GateRuleMode;
   /** PR-size manual-review HOLD (#gate-size). `off` (default/absent) = no size hold; `advisory`/`block` = a PR with
-   *  >= 10 changed files OR >= 1000 changed (added+deleted) lines that would otherwise pass is HELD for manual review
-   *  (neutral gate → "manual" verdict), never auto-merged and never a hard failure. Opt-in via `gate.size.mode`. */
+   *  >= sizeGateMaxFiles changed files OR >= sizeGateMaxLines changed (added+deleted) lines that would otherwise
+   *  pass is HELD for manual review (neutral gate → "manual" verdict), never auto-merged and never a hard failure.
+   *  Opt-in via `gate.size.mode`. */
   sizeGateMode?: GateRuleMode | undefined;
+  /** PR-size HOLD file-count threshold (#gate-size), config-only — set via `.loopover.yml gate.size.maxFiles`.
+   *  `undefined` ⇒ the 10-file default. */
+  sizeGateMaxFiles?: number | undefined;
+  /** PR-size HOLD changed-line-count threshold (#gate-size), config-only — set via `.loopover.yml
+   *  gate.size.maxLines`. `undefined` ⇒ the 1000-line default. */
+  sizeGateMaxLines?: number | undefined;
   /** Lockfile-tamper-risk gate (#2563). `off` (default/absent) = no scan; `advisory`/`block` = a changed
    *  `package-lock.json` whose diff changes a `resolved`/`integrity` value WITHOUT the same package's version
    *  changing in a changed `package.json`, or whose `resolved` URL points outside `registry.npmjs.org`, produces
