@@ -7877,16 +7877,24 @@ export function extractLinkedIssueNumbersWithOverflow(text: string, repoFullName
 
   const linkedIssues: number[] = [];
   const seen = new Set<number>();
-  // Matches both GitHub's bare `KEYWORD #N` and fully-qualified `KEYWORD owner/repo#N` closing syntax (#3862) --
-  // the qualified form only counts when owner/repo case-insensitively matches THIS repo; a reference to a
-  // different repo closes an issue there, not here, and must not spoof a same-repo linked-issue match.
-  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:([\w.-]+\/[\w.-]+)#|#)(\d+)\b/gi)) {
+  // Matches GitHub's bare `KEYWORD #N`, fully-qualified `KEYWORD owner/repo#N` (#3862), and full-URL
+  // `KEYWORD https://github.com/owner/repo/issues/N` closing syntax -- the last form is GitHub's own linker
+  // ALSO recognizes it (confirmed via the GraphQL closingIssuesReferences field), but this regex previously
+  // required a literal `#`, so a contributor pasting the full issue URL (a common habit, e.g. from a browser
+  // address bar) silently produced zero linked issues and tripped the "no linked issue" hard-rule close on a
+  // PR that genuinely had one (#draft-evasion... no, #linked-issue-url-form). Both the qualified and URL forms
+  // only count when owner/repo case-insensitively matches THIS repo -- a reference to a different repo closes
+  // an issue there, not here, and must not spoof a same-repo linked-issue match.
+  for (const match of text.matchAll(
+    /\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+(?:https?:\/\/(?:www\.)?github\.com\/(?<urlOwner>[\w.-]+\/[\w.-]+)\/issues\/(?<urlNum>\d+)|(?<qualOwner>[\w.-]+\/[\w.-]+)#(?<qualNum>\d+)|#(?<bareNum>\d+))\b/gi,
+  )) {
     const matchStart = match.index!;
     const matchEnd = matchStart + match[0].length;
     if (inlineCodeSpanRanges.some((range) => matchStart < range.end && matchEnd > range.start)) continue;
-    const owner = match[1];
+    const groups = match.groups!;
+    const owner = groups.urlOwner ?? groups.qualOwner;
     if (owner && owner.toLowerCase() !== target) continue;
-    const value = Number(match[2]);
+    const value = Number(groups.urlNum ?? groups.qualNum ?? groups.bareNum);
     if (!Number.isInteger(value) || value <= 0 || seen.has(value)) continue;
     seen.add(value);
     if (linkedIssues.length >= normalizedLimit) return { numbers: linkedIssues, overflow: true };

@@ -926,6 +926,12 @@ function extractLinkedIssueNumbers(text: string, repoFullName: string): number[]
   for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+([\w.-]+\/[\w.-]+)#(\d+)\b/gi)) {
     if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
   }
+  // GitHub's own linker ALSO recognizes the full issue URL form (`KEYWORD https://github.com/owner/repo/issues/N`)
+  // -- a common habit (e.g. pasted from a browser address bar) that the two `#`-anchored forms above never match.
+  // Same same-repo-only rule as the qualified form (#linked-issue-url-form).
+  for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+https?:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\b/gi)) {
+    if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
+  }
   return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];
 }
 

@@ -90,6 +90,22 @@ describe("database row parser hardening", () => {
     expect(extractLinkedIssueNumbers("Fixes #1\nCloses owner/repo#1\nResolves owner/repo#2", "owner/repo")).toEqual([1, 2]);
   });
 
+  it("REGRESSION (#linked-issue-url-form): recognizes the full GitHub issue URL closing form GitHub's own linker also accepts", () => {
+    // The exact real-world shape this was missed for: `Closes https://github.com/owner/repo/issues/N`.
+    expect(extractLinkedIssueNumbers("Closes https://github.com/owner/repo/issues/5914", "owner/repo")).toEqual([5914]);
+    // http (not just https) and a leading www. subdomain are both accepted.
+    expect(extractLinkedIssueNumbers("Fixes http://github.com/owner/repo/issues/1", "owner/repo")).toEqual([1]);
+    expect(extractLinkedIssueNumbers("Resolves https://www.github.com/owner/repo/issues/2", "owner/repo")).toEqual([2]);
+    // Case-insensitive, matching GitHub's own repo-name matching -- same as the qualified `owner/repo#N` form.
+    expect(extractLinkedIssueNumbers("Closes https://github.com/Owner/Repo/issues/7", "owner/repo")).toEqual([7]);
+    // A DIFFERENT repo's URL must not spoof a same-repo linked issue, same rule as the qualified form.
+    expect(extractLinkedIssueNumbers("Closes https://github.com/other/repo/issues/99", "owner/repo")).toEqual([]);
+    // URL, qualified, and bare forms mix freely and dedupe together.
+    expect(extractLinkedIssueNumbers("Fixes #1\nCloses https://github.com/owner/repo/issues/2\nResolves owner/repo#3", "owner/repo")).toEqual([1, 2, 3]);
+    // Still respects the inline-code-span exclusion, same as every other closing-keyword form.
+    expect(extractLinkedIssueNumbers("Fixes `not a directive` https://github.com/owner/repo/issues/42", "owner/repo")).toEqual([]);
+  });
+
   it("REGRESSION (#3862): a stored PR using ONLY the qualified `Closes owner/repo#N` form is not flagged as unlinked", async () => {
     const env = createTestEnv();
     await upsertPullRequestFromGitHub(env, "owner/repo", {

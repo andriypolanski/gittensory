@@ -421,6 +421,11 @@ describe("predicted-gate engine branch coverage (#2283)", () => {
     expect(internals.extractLinkedIssueNumbers("closes other/repo#9", REPO.fullName)).not.toContain(9);
     expect(internals.extractLinkedIssueNumbers(`closes ${REPO.fullName}#9`, REPO.fullName)).toContain(9);
 
+    // REGRESSION (#linked-issue-url-form): the full GitHub issue URL closing form, which GitHub's own linker
+    // also recognizes, must not silently extract zero linked issues.
+    expect(internals.extractLinkedIssueNumbers(`closes https://github.com/${REPO.fullName}/issues/11`, REPO.fullName)).toContain(11);
+    expect(internals.extractLinkedIssueNumbers(`closes https://github.com/other/repo/issues/11`, REPO.fullName)).not.toContain(11);
+
     const issueQuality: IssueQualityReport = {
       repoFullName: REPO.fullName,
       generatedAt: "2026-01-01T00:00:00.000Z",
