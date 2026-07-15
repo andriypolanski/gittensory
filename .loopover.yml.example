@@ -686,6 +686,12 @@ settings:
   # of this setting. Bool. Default: false.
   closeOwnerAuthors: false
 
+  # AI review, gate evaluation, and public-surface publish are skipped ENTIRELY for a PR/event genuinely
+  # triggered by a known automation bot (release-please, Renovate, Dependabot). "inherit" defers to the
+  # self-host operator's LOOPOVER_SKIP_AUTOMATION_BOT_PRS env default (itself default-ON); "off"/"enabled"
+  # override that default in either direction for this repo. inherit | off | enabled. Default: inherit.
+  # skipAutomationBotAuthors: inherit
+
   # Hard manual-review path guardrails are config-as-code only. Safe by default (#3943): whatever you list
   # here is ADDED to a fixed, built-in invariant set (CI workflows/scripts, deploy config, config-as-code
   # files, core engine-decision paths — see DEFAULT_HARD_GUARDRAIL_GLOBS in src/review/guardrail-config.ts)

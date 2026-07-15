@@ -337,6 +337,7 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
     hardGuardrailGlobs: "hardGuardrailGlobs:",
     hardGuardrailGlobsOverridesInvariants: "hardGuardrailGlobsOverridesInvariants:",
     aiReviewConfirmedContributorsOnly: "aiReviewConfirmedContributorsOnly:",
+    skipAutomationBotAuthors: "skipAutomationBotAuthors:",
     manualReviewLabel: "manualReviewLabel:",
     readyToMergeLabel: "readyToMergeLabel:",
     changesRequestedLabel: "changesRequestedLabel:",
@@ -2496,6 +2497,21 @@ describe("parseFocusManifest settings override + resolveEffectiveSettings", () =
     expect(invalid.settings.moderationGateMode).toBeUndefined();
     expect(invalid.settings.moderationWarningLabel).toBeUndefined();
     expect(invalid.warnings.some((w) => /settings\.moderationGateMode/.test(w))).toBe(true);
+  });
+
+  it("parses + resolves skipAutomationBotAuthors from the settings: block, overlaying the DB (#automation-bot-skip)", () => {
+    const manifest = parseFocusManifest({ settings: { skipAutomationBotAuthors: "enabled" } });
+    expect(manifest.settings.skipAutomationBotAuthors).toBe("enabled");
+    // yml overlays (replaces) the DB-configured value.
+    const eff = resolveEffectiveSettings({ skipAutomationBotAuthors: "off" } as unknown as RepositorySettings, manifest);
+    expect(eff.skipAutomationBotAuthors).toBe("enabled");
+    // Omitted in yml ⇒ the DB-configured value survives untouched.
+    const noOverride = resolveEffectiveSettings({ skipAutomationBotAuthors: "off" } as unknown as RepositorySettings, parseFocusManifest({}));
+    expect(noOverride.skipAutomationBotAuthors).toBe("off");
+    // An invalid enum is dropped with a warning rather than silently coerced.
+    const invalid = parseFocusManifest({ settings: { skipAutomationBotAuthors: "sometimes" as never } });
+    expect(invalid.settings.skipAutomationBotAuthors).toBeUndefined();
+    expect(invalid.warnings.some((w) => /settings\.skipAutomationBotAuthors/.test(w))).toBe(true);
   });
 
   it("moderationRules accepts review_evasion alongside the original three rule types (#review-evasion-protection)", () => {

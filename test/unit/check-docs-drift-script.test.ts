@@ -485,17 +485,25 @@ describe("check-docs-drift script", () => {
       }
     });
 
-    it("treats NOT_YML_CONFIGURABLE_SETTINGS_FIELDS members as excluded even with zero yml mention (repoFullName, createdAt, updatedAt, skipAutomationBotAuthors)", () => {
+    it("treats NOT_YML_CONFIGURABLE_SETTINGS_FIELDS members as excluded even with zero yml mention (repoFullName, createdAt, updatedAt)", () => {
       const files = baseFixtures();
       files["src/types.ts"] = files["src/types.ts"]!.replace(
         "};",
-        "  repoFullName: string;\n  createdAt?: string | null | undefined;\n  updatedAt?: string | null | undefined;\n  skipAutomationBotAuthors?: \"inherit\" | \"off\" | \"enabled\" | undefined;\n};",
+        "  repoFullName: string;\n  createdAt?: string | null | undefined;\n  updatedAt?: string | null | undefined;\n};",
       );
       const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
 
-      for (const field of ["repoFullName", "createdAt", "updatedAt", "skipAutomationBotAuthors"]) {
+      for (const field of ["repoFullName", "createdAt", "updatedAt"]) {
         expect(result.failures.find((failure) => failure.includes(field))).toBeUndefined();
       }
+    });
+
+    it("no longer excludes skipAutomationBotAuthors -- it's wired into FocusManifestSettings now, so a zero-yml-mention regression must fail like any other field (#automation-bot-skip)", () => {
+      const files = baseFixtures();
+      files["src/types.ts"] = files["src/types.ts"]!.replace("};", "  skipAutomationBotAuthors?: \"inherit\" | \"off\" | \"enabled\" | undefined;\n};");
+      const result = checkDocsDrift({ root: "/fake", readFile: makeReadFile(files) });
+
+      expect(result.failures.find((failure) => failure.includes("skipAutomationBotAuthors"))).toBeDefined();
     });
 
     it("catches a FocusManifest field nested inside another config type with zero yml mention -- the exact review.visual.production_url shape (#4617)", () => {

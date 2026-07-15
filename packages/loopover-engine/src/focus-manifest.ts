@@ -398,6 +398,7 @@ export type FocusManifestSettings = Partial<
     | "aiReviewAllAuthors"
     | "aiReviewConfirmedContributorsOnly"
     | "closeOwnerAuthors"
+    | "skipAutomationBotAuthors"
     | "autoLabelEnabled"
     | "typeLabelsEnabled"
     | "badgeEnabled"
@@ -2219,6 +2220,11 @@ function parseSettingsOverride(value: JsonValue | undefined, warnings: string[])
   if (commandRateLimitAiMaxPerWindow !== null) out.commandRateLimitAiMaxPerWindow = commandRateLimitAiMaxPerWindow;
   const commandRateLimitWindowHours = normalizeOptionalPositiveInteger(r.commandRateLimitWindowHours, "settings.commandRateLimitWindowHours", warnings);
   if (commandRateLimitWindowHours !== null) out.commandRateLimitWindowHours = commandRateLimitWindowHours;
+  // Automation-bot skip (#automation-bot-skip): per-repo override of the global LOOPOVER_SKIP_AUTOMATION_BOT_PRS
+  // default -- "inherit" defers to it, "off"/"enabled" override in either direction for this repo. Previously
+  // DB/dashboard-write-only despite RepositorySettings already carrying the field; this closes that gap.
+  const skipAutomationBotAuthors = normalizeOptionalEnum(r.skipAutomationBotAuthors, "settings.skipAutomationBotAuthors", ["inherit", "off", "enabled"] as const, warnings);
+  if (skipAutomationBotAuthors !== null) out.skipAutomationBotAuthors = skipAutomationBotAuthors;
   // Moderation-rules engine (#selfhost-mod-engine): per-repo override of the global moderation config.
   const moderationGateMode = normalizeOptionalEnum(r.moderationGateMode, "settings.moderationGateMode", ["inherit", "off", "enabled"] as const, warnings);
   if (moderationGateMode !== null) out.moderationGateMode = moderationGateMode;

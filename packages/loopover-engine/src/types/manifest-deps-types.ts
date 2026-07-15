@@ -337,6 +337,11 @@ export type RepositorySettings = {
    *  PRs are exempt from auto-close (merge or manual-hold only). Per-repo configurable so maintainers choose
    *  rather than inheriting a hardwired opinion. */
   closeOwnerAuthors: boolean;
+  /** AI review, gate evaluation, and public-surface publish are skipped entirely for a PR/event genuinely
+   *  triggered by a known automation bot (release-please, Renovate, Dependabot). `"inherit"` defers to the
+   *  self-host operator's `LOOPOVER_SKIP_AUTOMATION_BOT_PRS` global default (itself default-ON); `"off"`/
+   *  `"enabled"` override that default in either direction for this repo. */
+  skipAutomationBotAuthors?: "inherit" | "off" | "enabled" | undefined;
   autoLabelEnabled: boolean;
   gittensorLabel: string;
   createMissingLabel: boolean;

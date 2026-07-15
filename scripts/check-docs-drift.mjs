@@ -90,22 +90,17 @@ export function extractRepositorySettingsFields(typesText) {
 }
 
 /** RepositorySettings fields deliberately excluded from the "every field must have SOME
- *  `.loopover.yml.example` mention" check below, for two distinct reasons -- flagging any as "undocumented"
- *  would be a false drift signal, not a real gap:
- *   - Not a maintainer-settable knob at all: `repoFullName` is the row's own identity key (set once at
- *     creation, the opposite of something a maintainer overrides via config); `createdAt`/`updatedAt` are
- *     DB-row bookkeeping timestamps.
- *   - `skipAutomationBotAuthors`: genuinely settable (global env default + per-repo `inherit`/`off`/`enabled`
- *     override, mirroring `moderationGateMode`'s shape), but DELIBERATELY not wired into the
- *     FocusManifest/`.loopover.yml` parsing path -- DB-only for now, confirmed as an intentional scope choice
- *     for this feature rather than an oversight. It is correctly absent from `FocusManifestSettings` (so the
- *     separate `.loopover.yml.example` field-exhaustiveness suite never expected a token for it either). */
-const NOT_YML_CONFIGURABLE_SETTINGS_FIELDS = new Set([
-  "repoFullName",
-  "createdAt",
-  "updatedAt",
-  "skipAutomationBotAuthors",
-]);
+ *  `.loopover.yml.example` mention" check below -- flagging any as "undocumented" would be a false drift
+ *  signal, not a real gap. Not a maintainer-settable knob at all: `repoFullName` is the row's own identity
+ *  key (set once at creation, the opposite of something a maintainer overrides via config); `createdAt`/
+ *  `updatedAt` are DB-row bookkeeping timestamps.
+ *
+ *  `skipAutomationBotAuthors` USED to live here too (DB-only, "confirmed as an intentional scope choice" per
+ *  #4659 -- the same DB-only-escape-hatch shape `agentGlobalFreezeOverride` had, before that field was removed
+ *  entirely for making the DB a second, independently-mutable source of truth alongside config). It is no
+ *  longer DB-only: it's wired into `FocusManifestSettings`/`parseSettingsOverride` like every sibling
+ *  `*GateMode`-shaped field, so it's held to the same yml-exhaustiveness bar as the rest of the surface now. */
+const NOT_YML_CONFIGURABLE_SETTINGS_FIELDS = new Set(["repoFullName", "createdAt", "updatedAt"]);
 
 /** RepositorySettings fields whose `.loopover.yml.example` documentation exists under a DIFFERENT, shorter
  *  name than the field itself -- almost always because the yml groups several sibling fields under one named
