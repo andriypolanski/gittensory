@@ -12,6 +12,7 @@
 import { existsSync } from "node:fs";
 import { DatabaseSync } from "node:sqlite";
 import { openClaimLedger, resolveClaimLedgerDbPath } from "./claim-ledger.js";
+import { argsWantJson, reportCliFailure } from "./cli-error.js";
 import { initEventLedger, resolveEventLedgerDbPath } from "./event-ledger.js";
 import { initGovernorLedger, resolveGovernorLedgerDbPath } from "./governor-ledger.js";
 import { initPredictionLedger, resolvePredictionLedgerDbPath } from "./prediction-ledger.js";
@@ -166,8 +167,8 @@ function renderPurgeSummary(summary) {
 export function runPurge(args, options = {}) {
   const parsed = parsePurgeArgs(args);
   if ("error" in parsed) {
-    console.error(parsed.error);
-    return 2;
+    // Parse failures still honor `--json` via argv (#5915) — same contract as claim-ledger-cli.js.
+    return reportCliFailure(argsWantJson(args), parsed.error);
   }
 
   if (parsed.dryRun) {

@@ -232,6 +232,26 @@ describe("runPurge --dry-run (#5564)", () => {
     expect(error).toHaveBeenCalledWith(expect.stringContaining("Usage: loopover-miner purge"));
   });
 
+  it("#5915: arg-parse failure emits {ok:false,error} on stdout when --json is set", () => {
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    const error = vi.spyOn(console, "error").mockImplementation(() => undefined);
+
+    expect(runPurge(["--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: expect.stringContaining("Usage: loopover-miner purge"),
+    });
+    expect(error).not.toHaveBeenCalled();
+
+    log.mockClear();
+    expect(runPurge(["--repo", "no-slash", "--json"])).toBe(2);
+    expect(JSON.parse(String(log.mock.calls[0]?.[0]))).toEqual({
+      ok: false,
+      error: "Repository must be in owner/repo form.",
+    });
+    expect(error).not.toHaveBeenCalled();
+  });
+
   it("opens the real default on-disk stores in dry-run when no resolveDbPaths override is supplied", () => {
     const root = tempDir();
     const previousDirs: Record<string, string | undefined> = {
