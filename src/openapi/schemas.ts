@@ -681,6 +681,8 @@ export const RepositorySettingsSchema = z
     qualityGateMinScore: z.number().nullable().optional(),
     slopGateMode: z.enum(["off", "advisory", "block"]),
     sizeGateMode: z.enum(["off", "advisory", "block"]).optional(),
+    sizeGateMaxFiles: z.number().optional(),
+    sizeGateMaxLines: z.number().optional(),
     lockfileIntegrityGateMode: z.enum(["off", "advisory", "block"]).optional(),
     claGateMode: z.enum(["off", "advisory", "block"]).optional(),
     claConsentPhrase: z.string().nullable().optional(),

@@ -916,6 +916,29 @@ describe("size + guardrail manual-review HOLD (#gate-size / #gate-guardrail)", (
     const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { size: { mode: "advisory" } } }));
     expect(eff.sizeGateMode).toBe("advisory");
   });
+  it("gateCheckPolicy threads settings.sizeGateMaxFiles/sizeGateMaxLines through to the policy object", () => {
+    const policy = gateCheckPolicy(settings({ sizeGateMode: "advisory", sizeGateMaxFiles: 30, sizeGateMaxLines: 2000 } as Partial<RepositorySettings>), null, true);
+    expect(policy.sizeGateMaxFiles).toBe(30);
+    expect(policy.sizeGateMaxLines).toBe(2000);
+  });
+  it("gateCheckPolicy defaults sizeGateMaxFiles/sizeGateMaxLines to null when unset on settings", () => {
+    const policy = gateCheckPolicy(settings({ sizeGateMode: "advisory" }), null, true);
+    expect(policy.sizeGateMaxFiles).toBeNull();
+    expect(policy.sizeGateMaxLines).toBeNull();
+  });
+  it("resolveEffectiveSettings maps gate.size.maxFiles/maxLines → sizeGateMaxFiles/sizeGateMaxLines (#automation-config)", () => {
+    const eff = resolveEffectiveSettings(settings({}), parseFocusManifest({ gate: { size: { mode: "advisory", maxFiles: 25, maxLines: 400 } } }));
+    expect(eff.sizeGateMaxFiles).toBe(25);
+    expect(eff.sizeGateMaxLines).toBe(400);
+  });
+  it("configured sizeGateMaxFiles/sizeGateMaxLines REPLACE the 10-file/1000-line defaults, in both directions", () => {
+    // A raised maxFiles threshold: a PR that would hold under the 10-file default now passes.
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", sizeGateMaxFiles: 25, changedFileCount: 12, changedLineCount: 10 }).conclusion).toBe("success");
+    // A lowered maxLines threshold: a PR that would pass under the 1000-line default now holds.
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", sizeGateMaxLines: 400, changedFileCount: 2, changedLineCount: 500 }).conclusion).toBe("neutral");
+    // null (as opposed to a configured number) falls back to the built-in default, same as unset.
+    expect(evaluateGateCheck(clean(), { sizeGateMode: "advisory", sizeGateMaxFiles: null, changedFileCount: 9, changedLineCount: 999 }).conclusion).toBe("success");
+  });
 });
 
 describe("lockfile-tamper-risk gate blocker (#2563)", () => {

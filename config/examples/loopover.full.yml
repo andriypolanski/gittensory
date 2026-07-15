@@ -216,12 +216,15 @@ gate:
     minScore: null
 
   # Oversized-PR gate. A PR at/above EITHER the file-count or line-count threshold
-  # (engine defaults, not configurable here) gets a manual-review HOLD finding —
-  # never a hard blocker; mode only turns this hold signal on or off.
-  # off | advisory | block. Default: off. Config-as-code only — no DB column or
-  # dashboard toggle; this can only be set here.
+  # gets a manual-review HOLD finding — never a hard blocker; mode only turns this
+  # hold signal on or off. off | advisory | block. Default: off. Config-as-code
+  # only — no DB column or dashboard toggle; this can only be set here.
   size:
     mode: off
+    # File-count threshold. Positive integer. Default: 10.
+    # maxFiles: 10
+    # Changed (added+deleted) line-count threshold. Positive integer. Default: 1000.
+    # maxLines: 1000
 
   # Lockfile-tamper-risk gate. Scans a changed package-lock.json diff for a
   # resolved/integrity value that changed WITHOUT the same package's version

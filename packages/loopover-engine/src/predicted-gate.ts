@@ -308,6 +308,8 @@ export function buildPredictedGateVerdict(args: {
     // never sent to this predictor, so the size hold can only be predicted from file count (disclosed in the
     // note above) — never claim a line count this function has no way to know.
     sizeGateMode: gate.sizeMode ?? undefined,
+    sizeGateMaxFiles: gate.sizeMaxFiles ?? undefined,
+    sizeGateMaxLines: gate.sizeMaxLines ?? undefined,
     ...(hasChangedPaths
       ? {
           changedFileCount: changedPaths.length,
