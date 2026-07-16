@@ -81,6 +81,12 @@ export function OverviewPortfolioCard({ portfolio }: { portfolio: PortfolioQueue
           <Stat label="Queued" value={portfolio.summary.byStatus.queued} />
           <Stat label="In progress" value={portfolio.summary.byStatus.in_progress} tone="text-[var(--warning)]" />
           <Stat label="Done" value={portfolio.summary.byStatus.done} tone="text-[var(--success)]" />
+          {/* Deliver the CLI/web-UI parity the portfolio-queue data path promises (#6185): the CLI's `queue
+              dashboard` renders "oldest-queued: Xm" (portfolio-dashboard.js), and the same minutes-rounded age
+              is shown here. Omitted (like the CLI) when the queue is empty and the age is null. */}
+          {portfolio.summary.oldestQueuedAgeMs !== null && (
+            <Stat label="Oldest queued" value={`${Math.round(portfolio.summary.oldestQueuedAgeMs / 60000)}m`} />
+          )}
         </>
       )}
     </SummaryCard>

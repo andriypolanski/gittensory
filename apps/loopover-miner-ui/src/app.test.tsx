@@ -39,6 +39,18 @@ describe("OverviewView (#4853)", () => {
     expect(statValue("Done")).toBe("2");
     expect(statValue("Active")).toBe("3");
     expect(statValue("Total recorded")).toBe("4");
+    // Oldest-queued age is omitted when null (empty queue), matching the CLI (#6185).
+    expect(screen.queryByText("Oldest queued")).toBeNull();
+  });
+
+  it("renders the oldest-queued age in CLI-parity minutes when the queue has one (#6185)", () => {
+    const portfolioWithAge: PortfolioQueueResult = {
+      ok: true,
+      summary: { total: 3, byStatus: { queued: 3, in_progress: 0, done: 0 }, repos: [], oldestQueuedAgeMs: 5_400_000 },
+    };
+    render(<OverviewView runs={runsOk} portfolio={portfolioWithAge} claims={claimsOk} />);
+    // 5_400_000ms / 60000 = 90m, matching portfolio-dashboard.js's `Math.round(oldestQueuedAgeMs / 60000)m`.
+    expect(statValue("Oldest queued")).toBe("90m");
   });
 
   it("shows an independent loading message per card before data arrives", () => {
