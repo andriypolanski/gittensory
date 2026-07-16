@@ -15,8 +15,7 @@
   },
   "keywords": [
     "gittensor",
-    "gittensory",
-    "miner",
+        "miner",
     "cli",
     "agent"
   ],
