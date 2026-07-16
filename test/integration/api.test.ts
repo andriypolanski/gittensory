@@ -133,6 +133,25 @@ describe("api routes", () => {
     });
     expect(JSON.stringify(compatibilityPayload)).not.toMatch(/token|admin|wallet|hotkey|raw trust|scoreability|private repo|local-path/i);
 
+    const findingTaxonomy = await app.request("/v1/mcp/finding-taxonomy", {}, env);
+    expect(findingTaxonomy.status).toBe(200);
+    const findingTaxonomyPayload = await findingTaxonomy.json();
+    expect(findingTaxonomyPayload).toMatchObject({
+      categories: expect.any(Array),
+      severities: expect.any(Array),
+    });
+    expect(findingTaxonomyPayload.categories.length).toBeGreaterThan(0);
+    expect(findingTaxonomyPayload.severities.length).toBeGreaterThan(0);
+
+    const enrichmentAnalyzers = await app.request("/v1/mcp/enrichment-analyzers", {}, env);
+    expect(enrichmentAnalyzers.status).toBe(200);
+    const enrichmentAnalyzersPayload = await enrichmentAnalyzers.json();
+    expect(enrichmentAnalyzersPayload).toMatchObject({
+      defaultProfile: expect.any(String),
+      analyzers: expect.any(Array),
+    });
+    expect(enrichmentAnalyzersPayload.analyzers.length).toBeGreaterThan(0);
+
     const unauthenticatedSpec = await app.request("/openapi.json", {}, env);
     expect(unauthenticatedSpec.status).toBe(200);
     await expect(unauthenticatedSpec.json()).resolves.toMatchObject({ info: { title: "LoopOver API" } });

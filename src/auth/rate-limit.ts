@@ -233,7 +233,14 @@ const SESSION_AUTHENTICATED_AUTH_PATHS = new Set(["/v1/auth/github/token", "/v1/
 
 function isPreAuthRateLimitPath(path: string): boolean {
   return (
-    (path === "/health" || path === "/v1/mcp/compatibility" || path === "/openapi.json" || path === "/mcp" || path.startsWith("/v1/auth/") || path === "/v1/github/webhook") &&
+    (path === "/health" ||
+      path === "/v1/mcp/compatibility" ||
+      path === "/v1/mcp/finding-taxonomy" ||
+      path === "/v1/mcp/enrichment-analyzers" ||
+      path === "/openapi.json" ||
+      path === "/mcp" ||
+      path.startsWith("/v1/auth/") ||
+      path === "/v1/github/webhook") &&
     !SESSION_AUTHENTICATED_AUTH_PATHS.has(path)
   );
 }

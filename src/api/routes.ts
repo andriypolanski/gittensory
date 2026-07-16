@@ -212,6 +212,8 @@ import { generateAndSendReviewRecap } from "../services/review-recap";
 import { loadOrComputeIssueQualityResponse } from "../services/issue-quality";
 import { loadMaintainerNoiseReport } from "../services/maintainer-noise";
 import { buildAmsMinerCohortComparison } from "../review/ams-miner-cohort";
+import { buildEnrichmentAnalyzersTaxonomyDocument } from "../review/enrichment-analyzers-taxonomy";
+import { buildFindingTaxonomyDocument } from "../review/finding-taxonomy";
 import { loadOrComputeBurdenForecastResponse } from "../services/burden-forecast";
 import { buildUnavailableQueueTrendReport } from "../services/queue-trends";
 import { loadOrComputeRepoOutcomePatternsResponse } from "../services/repo-outcome-patterns";
@@ -986,6 +988,8 @@ export function createApp() {
     }),
   );
   app.get("/v1/mcp/compatibility", (c) => c.json(buildMcpCompatibilityMetadata(nowIso())));
+  app.get("/v1/mcp/finding-taxonomy", (c) => c.json(buildFindingTaxonomyDocument()));
+  app.get("/v1/mcp/enrichment-analyzers", (c) => c.json(buildEnrichmentAnalyzersTaxonomyDocument()));
   app.get("/openapi.json", (c) => c.json(buildOpenApiSpec()));
   app.all("/mcp", handleMcpRequest);
 
@@ -5988,6 +5992,8 @@ async function isAuthorizedAmsIngest(env: Env, token: string | undefined): Promi
 function requiresApiToken(path: string): boolean {
   if (path === "/health") return false;
   if (path === "/v1/mcp/compatibility") return false;
+  if (path === "/v1/mcp/finding-taxonomy") return false;
+  if (path === "/v1/mcp/enrichment-analyzers") return false;
   if (/^\/v1\/public\/github\/repos\/[^/]+\/[^/]+\/stats$/.test(path)) return false;
   if (/^\/v1\/public\/repos\/[^/]+\/[^/]+\/badge\.(svg|json)$/.test(path)) return false;
   if (/^\/v1\/public\/repos\/[^/]+\/[^/]+\/quality$/.test(path)) return false;

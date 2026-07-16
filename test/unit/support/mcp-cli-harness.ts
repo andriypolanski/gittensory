@@ -4,6 +4,8 @@ import { mkdtempSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect } from "vitest";
+import { buildEnrichmentAnalyzersTaxonomyDocument } from "../../../src/review/enrichment-analyzers-taxonomy";
+import { buildFindingTaxonomyDocument } from "../../../src/review/finding-taxonomy";
 
 export const bin = join(process.cwd(), "packages/loopover-mcp/bin/loopover-mcp.js");
 let server: Server | null = null;
@@ -139,6 +141,8 @@ export async function startFixtureServer(
     latestRecommendedMcpVersion?: string;
     minMcpVersion?: string;
     compatibilityStatus?: number;
+    findingTaxonomyStatus?: number;
+    enrichmentAnalyzersStatus?: number;
     npmStatus?: number;
     decisionPackStatus?: number;
     decisionPackErrorBody?: string;
@@ -196,6 +200,24 @@ export async function startFixtureServer(
           generatedAt: "2026-05-30T00:00:00.000Z",
         }),
       );
+      return;
+    }
+    if (request.url === "/v1/mcp/finding-taxonomy") {
+      if (options.findingTaxonomyStatus && options.findingTaxonomyStatus >= 400) {
+        response.statusCode = options.findingTaxonomyStatus;
+        response.end(JSON.stringify({ error: "finding_taxonomy_unavailable" }));
+        return;
+      }
+      response.end(JSON.stringify(buildFindingTaxonomyDocument()));
+      return;
+    }
+    if (request.url === "/v1/mcp/enrichment-analyzers") {
+      if (options.enrichmentAnalyzersStatus && options.enrichmentAnalyzersStatus >= 400) {
+        response.statusCode = options.enrichmentAnalyzersStatus;
+        response.end(JSON.stringify({ error: "enrichment_analyzers_unavailable" }));
+        return;
+      }
+      response.end(JSON.stringify(buildEnrichmentAnalyzersTaxonomyDocument()));
       return;
     }
     if (request.url === "/health") {

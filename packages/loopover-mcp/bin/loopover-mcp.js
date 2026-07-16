@@ -50,6 +50,8 @@ const npmRegistryUrl = (process.env.LOOPOVER_NPM_REGISTRY_URL ?? "https://regist
 const upgradeCommand = `npm install -g ${packageName}@latest`;
 const npxFallbackCommand = `npx ${packageName}@latest <command>`;
 const compatibilityPath = "/v1/mcp/compatibility";
+const findingTaxonomyPath = "/v1/mcp/finding-taxonomy";
+const enrichmentAnalyzersPath = "/v1/mcp/enrichment-analyzers";
 const currentApiVersion = "0.1.0";
 const decisionPackCacheSchemaVersion = 1;
 const decisionPackCacheMaxEntries = 25;
@@ -2137,11 +2139,49 @@ server.registerResource(
   async () => {
     let data;
     try {
-      data = await apiGet(compatibilityPath);
+      data = await apiFetch(compatibilityPath, { method: "GET" }, { auth: false });
     } catch {
       data = { status: "unavailable", currentApiVersion, packageVersion };
     }
     return { contents: [{ uri: "loopover://compatibility", mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+  },
+);
+
+server.registerResource(
+  "loopover_finding_taxonomy",
+  "loopover://finding-taxonomy",
+  {
+    title: "LoopOver Finding Taxonomy",
+    description: "Canonical AI review finding categories and severity levels for discovery without hard-coding.",
+    mimeType: "application/json",
+  },
+  async () => {
+    let data;
+    try {
+      data = await apiFetch(findingTaxonomyPath, { method: "GET" }, { auth: false });
+    } catch {
+      data = { status: "unavailable" };
+    }
+    return { contents: [{ uri: "loopover://finding-taxonomy", mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
+  },
+);
+
+server.registerResource(
+  "loopover_enrichment_analyzers",
+  "gittensory://enrichment-analyzers",
+  {
+    title: "LoopOver Enrichment Analyzers",
+    description: "REES enrichment analyzer taxonomy: names, categories, cost classes, and default profiles.",
+    mimeType: "application/json",
+  },
+  async () => {
+    let data;
+    try {
+      data = await apiFetch(enrichmentAnalyzersPath, { method: "GET" }, { auth: false });
+    } catch {
+      data = { status: "unavailable" };
+    }
+    return { contents: [{ uri: "gittensory://enrichment-analyzers", mimeType: "application/json", text: JSON.stringify(data, null, 2) }] };
   },
 );
 

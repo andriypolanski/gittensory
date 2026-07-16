@@ -7,6 +7,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { closeFixtureServer, startFixtureServer } from "./support/mcp-cli-harness";
+import { ENRICHMENT_ANALYZERS_URI } from "../../src/review/enrichment-analyzers-taxonomy";
+import { FINDING_TAXONOMY_URI } from "../../src/review/finding-taxonomy";
 
 const bin = join(process.cwd(), "packages/loopover-mcp/bin/loopover-mcp.js");
 
@@ -115,6 +118,8 @@ describe("MCP resource discovery", () => {
     const uris = resources.map((r) => r.uri);
     expect(uris).toContain("loopover://changelog");
     expect(uris).toContain("loopover://compatibility");
+    expect(uris).toContain(FINDING_TAXONOMY_URI);
+    expect(uris).toContain(ENRICHMENT_ANALYZERS_URI);
   });
 
   it("resource descriptions do not expose forbidden public terms", async () => {
@@ -151,10 +156,96 @@ describe("MCP resource discovery", () => {
     expect(() => JSON.parse(content.text ?? "")).not.toThrow();
   });
 
+  it("can read the finding-taxonomy resource and get structured JSON", async () => {
+    const result = await client.readResource({ uri: FINDING_TAXONOMY_URI });
+    expect(result.contents).toHaveLength(1);
+    const content = result.contents[0];
+    expect(content?.mimeType).toBe("application/json");
+    if (!content || !("text" in content)) throw new Error("expected text content");
+    expect(() => JSON.parse(content.text ?? "")).not.toThrow();
+  });
+
+  it("can read the enrichment-analyzers resource and get structured JSON", async () => {
+    const result = await client.readResource({ uri: ENRICHMENT_ANALYZERS_URI });
+    expect(result.contents).toHaveLength(1);
+    const content = result.contents[0];
+    expect(content?.mimeType).toBe("application/json");
+    if (!content || !("text" in content)) throw new Error("expected text content");
+    expect(() => JSON.parse(content.text ?? "")).not.toThrow();
+  });
+
   it("decision-pack resource template is discoverable", async () => {
     const { resourceTemplates } = await client.listResourceTemplates();
     const names = resourceTemplates.map((t) => t.name);
     expect(names).toContain("loopover_decision_pack");
+  });
+});
+
+describe("MCP taxonomy resource mirrors (#6620)", () => {
+  let fixtureUrl: string;
+  let fixtureConfigDir: string;
+  let fixtureClient: Client;
+  let fixtureTransport: StdioClientTransport;
+
+  async function connectFixtureClient() {
+    fixtureConfigDir = mkdtempSync(join(tmpdir(), "gittensory-taxonomy-mirror-"));
+    fixtureTransport = new StdioClientTransport({
+      command: "node",
+      args: [bin, "--stdio"],
+      env: {
+        ...process.env,
+        LOOPOVER_API_URL: fixtureUrl,
+        LOOPOVER_CONFIG_DIR: fixtureConfigDir,
+        LOOPOVER_API_TIMEOUT_MS: "1000",
+      },
+    });
+    fixtureClient = new Client({ name: "taxonomy-mirror-test", version: "0.0.1" });
+    await fixtureClient.connect(fixtureTransport);
+  }
+
+  afterEach(async () => {
+    await fixtureClient?.close().catch(() => undefined);
+    if (fixtureConfigDir) rmSync(fixtureConfigDir, { recursive: true, force: true });
+    await closeFixtureServer();
+  });
+
+  it("reads finding taxonomy from the API mirror when available", async () => {
+    fixtureUrl = await startFixtureServer({});
+    await connectFixtureClient();
+    const result = await fixtureClient.readResource({ uri: FINDING_TAXONOMY_URI });
+    const content = result.contents[0];
+    if (!content || !("text" in content)) throw new Error("expected text content");
+    const body = JSON.parse(content.text ?? "") as { categories: string[]; severities: string[] };
+    expect(body.categories.length).toBeGreaterThan(0);
+    expect(body.severities.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to unavailable when finding-taxonomy API fetch fails", async () => {
+    fixtureUrl = await startFixtureServer({ findingTaxonomyStatus: 503 });
+    await connectFixtureClient();
+    const result = await fixtureClient.readResource({ uri: FINDING_TAXONOMY_URI });
+    const content = result.contents[0];
+    if (!content || !("text" in content)) throw new Error("expected text content");
+    expect(JSON.parse(content.text ?? "")).toMatchObject({ status: "unavailable" });
+  });
+
+  it("reads enrichment analyzers from the API mirror when available", async () => {
+    fixtureUrl = await startFixtureServer({});
+    await connectFixtureClient();
+    const result = await fixtureClient.readResource({ uri: ENRICHMENT_ANALYZERS_URI });
+    const content = result.contents[0];
+    if (!content || !("text" in content)) throw new Error("expected text content");
+    const body = JSON.parse(content.text ?? "") as { analyzers: Array<{ name: string }> };
+    expect(body.analyzers.length).toBeGreaterThan(0);
+  });
+
+  it("falls back to unavailable when enrichment-analyzers API fetch fails", async () => {
+    fixtureUrl = await startFixtureServer({ enrichmentAnalyzersStatus: 503 });
+    await connectFixtureClient();
+    const result = await fixtureClient.readResource({ uri: ENRICHMENT_ANALYZERS_URI });
+    const content = result.contents[0];
+    if (!content || !("text" in content)) throw new Error("expected text content");
+    expect(JSON.parse(content.text ?? "")).toMatchObject({ status: "unavailable" });
   });
 });
 
