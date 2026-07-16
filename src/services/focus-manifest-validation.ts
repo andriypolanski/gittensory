@@ -7,6 +7,8 @@ import {
   reviewConfigToJson,
   reviewRecapConfigToJson,
   maintainerRecapConfigToJson,
+  opsConfigToJson,
+  publicStatsConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
   type FocusManifestSource,
@@ -76,6 +78,10 @@ function focusManifestToNormalizedJson(manifest: FocusManifest): Record<string, 
   if (reviewRecap !== null) normalized.reviewRecap = reviewRecap;
   const maintainerRecap = maintainerRecapConfigToJson(manifest.maintainerRecap);
   if (maintainerRecap !== null) normalized.maintainerRecap = maintainerRecap;
+  const ops = opsConfigToJson(manifest.ops);
+  if (ops !== null) normalized.ops = ops;
+  const publicStats = publicStatsConfigToJson(manifest.publicStats);
+  if (publicStats !== null) normalized.publicStats = publicStats;
 
   return normalized;
 }

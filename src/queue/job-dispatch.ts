@@ -24,7 +24,7 @@ import { isRecapEnabled, resolveMaintainerRecapManifestOverride, runMaintainerRe
 import { performRepoDocRefresh } from "../github/repo-doc-refresh-runner";
 import { executeAgentRun } from "../services/agent-orchestrator";
 import { deliverNotification, evaluateNotificationEvent } from "../notifications/service";
-import { isOpsEnabled, runOpsAlerts } from "../review/ops-wire";
+import { isOpsEnabled, resolveOpsManifestOverride, runOpsAlerts } from "../review/ops-wire";
 import { isSweepWatchdogEnabled, runSweepLivenessWatchdog } from "../review/sweep-watchdog";
 import { isPrReconciliationEnabled, runOpenPrReconciliation } from "../review/pr-reconciliation";
 import { isSelfTuneEnabled, runSelfTune } from "../review/selftune-wire";
@@ -278,12 +278,15 @@ export async function processJob(env: Env, message: JobMessage): Promise<void> {
     case "notify-deliver":
       await deliverNotification(env, message.deliveryId);
       return;
-    case "ops-alerts":
-      // Convergence (ops / observability, flag LOOPOVER_REVIEW_OPS). Defense-in-depth: the cron only ENQUEUES this
-      // when the flag is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so
-      // flag-OFF does zero work here too. Read-only telemetry — never throws into the queue.
-      if (isOpsEnabled(env)) await runOpsAlerts(env);
+    case "ops-alerts": {
+      // Convergence (ops / observability, flag LOOPOVER_REVIEW_OPS, config-as-code override #6275). Defense-in-
+      // depth: the cron only ENQUEUES this when enabled, but a stale in-flight job that lands after a flag-flip
+      // (env OR manifest) must still no-op, so disabled does zero work here too. Read-only telemetry — never
+      // throws into the queue.
+      const opsManifestOverride = await resolveOpsManifestOverride(env);
+      if (isOpsEnabled(env, opsManifestOverride)) await runOpsAlerts(env);
       return;
+    }
     case "sweep-liveness-watchdog":
       // Self-heal (flag LOOPOVER_SWEEP_WATCHDOG). Defense-in-depth: the cron only ENQUEUES this when the flag
       // is ON, but a stale in-flight job that lands after a flag-flip must still no-op, so flag-OFF does zero

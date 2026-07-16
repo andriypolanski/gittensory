@@ -373,6 +373,29 @@ export type FocusManifestMaintainerRecapConfig = {
 };
 
 /**
+ * Config-as-code override for the fleet-wide ops-alert scanning cron (LOOPOVER_REVIEW_OPS), declared under
+ * `ops:` (#6275). Mirrors `maintainerRecap:` exactly: fleet-wide, not per-repo — only meaningful on the
+ * loopover self-repo's own manifest (resolveLoopOverSelfRepoFullName), since ops-alert scanning is an
+ * operator-level setting with no per-repo activation check. No DB-backed counterpart, so the parsed value
+ * (or the default below when unset) IS the effective value. Not present (or present with no fields set) ⇒
+ * the caller falls back to the LOOPOVER_REVIEW_OPS env var, byte-identical to before this override existed.
+ */
+export type FocusManifestOpsConfig = {
+  present: boolean;
+  enabled: boolean;
+};
+
+/**
+ * Config-as-code override for the public `/v1/public/stats` API endpoint (LOOPOVER_PUBLIC_STATS), declared
+ * under `publicStats:` (#6275). Same shape and precedence as `ops:` above — fleet-wide, self-repo-manifest-
+ * sourced, no DB-backed counterpart. Not present ⇒ the caller falls back to the LOOPOVER_PUBLIC_STATS env var.
+ */
+export type FocusManifestPublicStatsConfig = {
+  present: boolean;
+  enabled: boolean;
+};
+
+/**
  * Generic repository-settings override declared in `.loopover.yml` under `settings:`. A partial of
  * {@link RepositorySettings} — every behaviour a maintainer can toggle in the dashboard can be set here
  * as code. Unset fields are omitted so the resolver layers it OVER the DB-backed settings
@@ -953,6 +976,8 @@ export type FocusManifest = {
   repoDocGeneration: FocusManifestRepoDocGenerationConfig;
   reviewRecap: FocusManifestReviewRecapConfig;
   maintainerRecap: FocusManifestMaintainerRecapConfig;
+  ops: FocusManifestOpsConfig;
+  publicStats: FocusManifestPublicStatsConfig;
   warnings: string[];
 };
 
@@ -1094,6 +1119,16 @@ const EMPTY_MAINTAINER_RECAP_CONFIG: FocusManifestMaintainerRecapConfig = {
   channel: DEFAULT_MAINTAINER_RECAP_CHANNEL,
 };
 
+const EMPTY_OPS_CONFIG: FocusManifestOpsConfig = {
+  present: false,
+  enabled: false,
+};
+
+const EMPTY_PUBLIC_STATS_CONFIG: FocusManifestPublicStatsConfig = {
+  present: false,
+  enabled: false,
+};
+
 const EMPTY_MANIFEST: FocusManifest = {
   present: false,
   source: "none",
@@ -1113,6 +1148,8 @@ const EMPTY_MANIFEST: FocusManifest = {
   repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
   reviewRecap: { ...EMPTY_REVIEW_RECAP_CONFIG },
   maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
+  ops: { ...EMPTY_OPS_CONFIG },
+  publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
   warnings: [],
 };
 
@@ -1144,7 +1181,9 @@ function emptyManifest(source: FocusManifestSource, warnings: string[] = []): Fo
     contentLane: { ...EMPTY_CONTENT_LANE_CONFIG },
     repoDocGeneration: { ...EMPTY_REPO_DOC_GENERATION_CONFIG },
     reviewRecap: { ...EMPTY_REVIEW_RECAP_CONFIG },
-  maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
+    maintainerRecap: { ...EMPTY_MAINTAINER_RECAP_CONFIG },
+    ops: { ...EMPTY_OPS_CONFIG },
+    publicStats: { ...EMPTY_PUBLIC_STATS_CONFIG },
   };
 }
 
@@ -1862,6 +1901,50 @@ function parseMaintainerRecapConfig(value: JsonValue | undefined, warnings: stri
 export function maintainerRecapConfigToJson(config: FocusManifestMaintainerRecapConfig): JsonValue {
   if (!config.present) return null;
   return { enabled: config.enabled, cadence: config.cadence, channel: config.channel };
+}
+
+/**
+ * Parse the optional `ops:` mapping (#6275). Mirrors {@link parseMaintainerRecapConfig}: the only field is
+ * `enabled` (no DB layer to overlay onto), so the parsed value IS the effective value.
+ */
+function parseOpsConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestOpsConfig {
+  if (value === undefined || value === null) return { ...EMPTY_OPS_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "ops" must be a mapping; ignoring it.');
+    return { ...EMPTY_OPS_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "ops.enabled", warnings) ?? false;
+  return { present: true, enabled };
+}
+
+/** Serialize an ops config back into the parse-compatible shape so a cached snapshot round-trips through
+ *  {@link parseOpsConfig} unchanged. Returns null when nothing is configured. */
+export function opsConfigToJson(config: FocusManifestOpsConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled };
+}
+
+/**
+ * Parse the optional `publicStats:` mapping (#6275). Mirrors {@link parseOpsConfig} exactly — the only field
+ * is `enabled`, no DB layer to overlay onto.
+ */
+function parsePublicStatsConfig(value: JsonValue | undefined, warnings: string[]): FocusManifestPublicStatsConfig {
+  if (value === undefined || value === null) return { ...EMPTY_PUBLIC_STATS_CONFIG };
+  if (typeof value !== "object" || Array.isArray(value)) {
+    warnings.push('Manifest field "publicStats" must be a mapping; ignoring it.');
+    return { ...EMPTY_PUBLIC_STATS_CONFIG };
+  }
+  const record = value as Record<string, JsonValue>;
+  const enabled = normalizeOptionalBoolean(record.enabled, "publicStats.enabled", warnings) ?? false;
+  return { present: true, enabled };
+}
+
+/** Serialize a publicStats config back into the parse-compatible shape so a cached snapshot round-trips
+ *  through {@link parsePublicStatsConfig} unchanged. Returns null when nothing is configured. */
+export function publicStatsConfigToJson(config: FocusManifestPublicStatsConfig): JsonValue {
+  if (!config.present) return null;
+  return { enabled: config.enabled };
 }
 
 function normalizeOptionalEnum<T extends string>(value: JsonValue | undefined, field: string, allowed: readonly T[], warnings: string[]): T | null {
@@ -3207,6 +3290,8 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     repoDocGeneration: parseRepoDocGenerationConfig(record.repoDocGeneration, warnings),
     reviewRecap: parseReviewRecapConfig(record.reviewRecap, warnings),
     maintainerRecap: parseMaintainerRecapConfig(record.maintainerRecap, warnings),
+    ops: parseOpsConfig(record.ops, warnings),
+    publicStats: parsePublicStatsConfig(record.publicStats, warnings),
     warnings,
   };
   if (
@@ -3225,7 +3310,9 @@ export function parseFocusManifest(raw: unknown, source?: FocusManifestSource): 
     !manifest.contentLane.present &&
     !manifest.repoDocGeneration.present &&
     !manifest.reviewRecap.present &&
-    !manifest.maintainerRecap.present
+    !manifest.maintainerRecap.present &&
+    !manifest.ops.present &&
+    !manifest.publicStats.present
   ) {
     warnings.push("Manifest contained no recognized focus fields; falling back to deterministic signals.");
     manifest.present = false;

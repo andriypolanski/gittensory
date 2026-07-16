@@ -1,10 +1,15 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../../src/index";
 import { recordGitHubRateLimitObservation } from "../../src/db/repositories";
 import { scheduledEnqueueDelaySeconds } from "../../src/selfhost/queue-common";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import { clearOpsManifestOverrideCacheForTest } from "../../src/review/ops-wire";
 import { createTestEnv } from "../helpers/d1";
 
 describe("worker entrypoint", () => {
+  beforeEach(() => {
+    clearOpsManifestOverrideCacheForTest();
+  });
   afterEach(() => {
     vi.restoreAllMocks();
     vi.unstubAllGlobals();
@@ -754,6 +759,39 @@ describe("worker entrypoint", () => {
     });
     const waitUntil: Promise<unknown>[] = [];
     await worker.scheduled(controllerFor("2026-05-25T05:15:00.000Z"), env, executionContext(waitUntil)); // non-hourly
+    await Promise.all(waitUntil);
+    expect(sent.some((m) => m.type === "ops-alerts")).toBe(false);
+  });
+
+  it("a present ops manifest override enqueues ops-alerts hourly even when LOOPOVER_REVIEW_OPS is OFF (#6275)", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: true } });
+    const waitUntil: Promise<unknown>[] = [];
+    await worker.scheduled(controllerFor("2026-05-25T05:00:00.000Z"), env, executionContext(waitUntil));
+    await Promise.all(waitUntil);
+    expect(sent.filter((m) => m.type === "ops-alerts")).toEqual([{ type: "ops-alerts", requestedBy: "schedule" }]);
+  });
+
+  it("a present ops manifest override suppresses ops-alerts hourly even when LOOPOVER_REVIEW_OPS is ON (#6275)", async () => {
+    const sent: Array<import("../../src/types").JobMessage> = [];
+    const env = createTestEnv({
+      LOOPOVER_REVIEW_OPS: "true",
+      JOBS: {
+        async send(message: import("../../src/types").JobMessage) {
+          sent.push(message);
+        },
+      } as unknown as Queue,
+    });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: false } });
+    const waitUntil: Promise<unknown>[] = [];
+    await worker.scheduled(controllerFor("2026-05-25T05:00:00.000Z"), env, executionContext(waitUntil));
     await Promise.all(waitUntil);
     expect(sent.some((m) => m.type === "ops-alerts")).toBe(false);
   });

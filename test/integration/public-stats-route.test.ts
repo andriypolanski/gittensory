@@ -1,6 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { beforeEach, describe, expect, it } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { createTestEnv } from "../helpers/d1";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
+import { clearPublicStatsManifestOverrideCacheForTest } from "../../src/review/public-stats";
 import { PUBLIC_ACCURACY_TREND_WEEKS } from "../../src/services/public-accuracy-trend";
 import { PUBLIC_REUSE_RATE_TREND_WEEKS } from "../../src/services/public-reuse-rate-trend";
 import { PUBLIC_REVIEW_VOLUME_TREND_WEEKS } from "../../src/services/public-review-volume-trend";
@@ -43,8 +45,26 @@ async function seed(env: Env) {
 }
 
 describe("GET /v1/public/stats (#1059)", () => {
+  beforeEach(() => {
+    clearPublicStatsManifestOverrideCacheForTest();
+  });
+
   it("404s when LOOPOVER_PUBLIC_STATS is off (default)", async () => {
     const env = createTestEnv();
+    const res = await createApp().request("/v1/public/stats", {}, env);
+    expect(res.status).toBe(404);
+  });
+
+  it("a present publicStats manifest override turns the endpoint ON even when LOOPOVER_PUBLIC_STATS is OFF (#6275)", async () => {
+    const env = createTestEnv(); // flag unset → OFF
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { publicStats: { enabled: true } });
+    const res = await createApp().request("/v1/public/stats", {}, env);
+    expect(res.status).toBe(200);
+  });
+
+  it("a present publicStats manifest override turns the endpoint OFF even when LOOPOVER_PUBLIC_STATS is ON (#6275)", async () => {
+    const env = createTestEnv({ LOOPOVER_PUBLIC_STATS: "1" });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { publicStats: { enabled: false } });
     const res = await createApp().request("/v1/public/stats", {}, env);
     expect(res.status).toBe(404);
   });

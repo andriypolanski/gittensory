@@ -39,14 +39,70 @@ import { resolveRepositorySettings } from "../settings/repository-settings";
 import { loadGatePrecisionReport, type GatePrecisionReport } from "../services/gate-precision";
 import { buildRepoOutcomeCalibration, type OutcomeCalibration } from "../services/outcome-calibration";
 import { triggerPagerDutyIncident, type PagerDutySeverity } from "../services/notify-pagerduty";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
 import { errorMessage, nowIso } from "../utils/json";
 
-/** True when the ops observability surface is enabled. Flag-OFF (default) → every export below is a no-op /
- *  404. Truthy follows the codebase convention (`/^(1|true|yes|on)$/i`, same as isSafetyEnabled). */
-export function isOpsEnabled(env: {
-  LOOPOVER_REVIEW_OPS?: string | undefined;
-}): boolean {
+/** A manifest-sourced enable override (#6275) -- the `ops` block of the loopover self-repo's `.loopover.yml`
+ *  (see FocusManifestOpsConfig). `present: false` (no block, or the repo has no manifest at all) means "no
+ *  override configured", not "disabled" -- the caller falls through to the env var in that case, exactly as
+ *  if this parameter were omitted. Mirrors MaintainerRecapManifestOverride (maintainer-recap-wire.ts). */
+export type OpsManifestOverride = { present: boolean; enabled: boolean };
+
+/** True when the ops observability surface is enabled. Config-as-code (#6275): a present `ops` manifest
+ *  block on the loopover self-repo wins outright; otherwise falls back to the LOOPOVER_REVIEW_OPS env flag
+ *  (default OFF -- every export below is a no-op / 404). Truthy env convention matches isSafetyEnabled. */
+export function isOpsEnabled(
+  env: { LOOPOVER_REVIEW_OPS?: string | undefined },
+  manifestOverride?: OpsManifestOverride | undefined,
+): boolean {
+  if (manifestOverride?.present) return manifestOverride.enabled;
   return /^(1|true|yes|on)$/i.test((env.LOOPOVER_REVIEW_OPS ?? "").trim());
+}
+
+// Short in-isolate TTL cache for resolveOpsManifestOverride, mirroring public-stats.ts's identical cache
+// (itself mirroring review-memory-wire.ts's reviewSuppressionCache): the override always resolves to the SAME
+// repo (resolveLoopOverSelfRepoFullName is fleet-wide, not per-caller), so a single slot suffices. Called from
+// the internal ops dashboard route, the scheduled cron tick, AND the queue's ops-alerts job -- without this,
+// every one of those triggers loadRepoFocusManifest's own persisted-snapshot read (a D1 query even on a cache
+// hit). The operator's `.loopover.yml ops:` block changes rarely, so the same 60s window public-stats uses is
+// a reasonable staleness bound here too.
+const OPS_MANIFEST_OVERRIDE_CACHE_TTL_MS = 60_000;
+let opsManifestOverrideCache: { override: OpsManifestOverride; at: number } | null = null;
+
+/**
+ * Config-as-code override lookup (#6275): read the `ops` block off the loopover self-repo's
+ * `.loopover.yml` (resolveLoopOverSelfRepoFullName) -- ops-alert scanning is a fleet-wide, operator-level
+ * setting, not a per-repo one (there is no repo context at either call site's activation check), so ONE
+ * designated repo's manifest stands in for "the operator's own config", the same way maintainerRecap
+ * (#2250) already does for the cross-repo recap digest. A manifest load failure (network blip, malformed
+ * YAML) degrades to `{ present: false }` -- the caller then falls through to the env var, exactly as if no
+ * override existed, so a manifest hiccup can never accidentally enable or disable the scan. `nowMs` defaults
+ * to `Date.now()` (mirrors public-stats.ts's resolvePublicStatsManifestOverride) so callers need no change,
+ * while tests can pass a deterministic value to exercise the TTL precisely.
+ */
+export async function resolveOpsManifestOverride(env: Env, nowMs: number = Date.now()): Promise<OpsManifestOverride> {
+  const hit = opsManifestOverrideCache;
+  if (hit && nowMs - hit.at < OPS_MANIFEST_OVERRIDE_CACHE_TTL_MS) return hit.override;
+  try {
+    const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
+    const config = manifest.ops;
+    const override = { present: config.present, enabled: config.enabled };
+    opsManifestOverrideCache = { override, at: nowMs };
+    return override;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "ops_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
+    const override = { present: false, enabled: false };
+    opsManifestOverrideCache = { override, at: nowMs };
+    return override;
+  }
+}
+
+/** Test-only: clears the cached override, mirroring clearPublicStatsManifestOverrideCacheForTest /
+ *  clearReviewSuppressionCacheForTest. Without this, a test suite running many cases would leak one test's
+ *  cached override into the next under fake/fixed timers. */
+export function clearOpsManifestOverrideCacheForTest(): void {
+  opsManifestOverrideCache = null;
 }
 
 // ── Anomaly thresholds (gittensory-native; conservative so a handful of samples never cries wolf) ──────────

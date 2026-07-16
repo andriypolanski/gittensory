@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { generateKeyPairSync } from "node:crypto";
 import { clearInstallationTokenCacheForTest } from "../../src/github/app";
 import { clearReviewSuppressionCacheForTest } from "../../src/review/review-memory-wire";
+import { clearOpsManifestOverrideCacheForTest } from "../../src/review/ops-wire";
 import { PR_PANEL_COMMENT_MARKER } from "../../src/github/comments";
 import * as backfillModule from "../../src/github/backfill";
 import * as rateLimitModule from "../../src/github/rate-limit";
@@ -222,6 +223,7 @@ describe("queue processors", () => {
   beforeEach(() => {
     clearInstallationTokenCacheForTest();
     clearReviewSuppressionCacheForTest();
+    clearOpsManifestOverrideCacheForTest();
     vi.mocked(fetchPullRequestFreshness).mockReset();
     vi.mocked(fetchPullRequestFreshness).mockImplementation(async (_env, args) => ({
       status: "current",
@@ -5709,6 +5711,38 @@ describe("queue processors", () => {
     await processJob(env, { type: "ops-alerts", requestedBy: "test" });
     expect(errors.mock.calls.map((c) => String(c[0])).some((line) => line.includes("ops_anomaly") && line.includes("owner/repo"))).toBe(true);
     errors.mockRestore();
+  });
+
+  it("ops-alerts job runs the scan when a present ops manifest override turns it ON even though LOOPOVER_REVIEW_OPS is OFF (#6275)", async () => {
+    const env = createTestEnv(); // flag unset → OFF
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: true } });
+    await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, ?, ?, 1, 1)")
+      .bind("owner/repo", "owner", "repo")
+      .run();
+    for (let i = 1; i <= 6; i += 1) {
+      await recordGateBlockOutcome(env, { repoFullName: "owner/repo", pullNumber: i, blockerCodes: ["missing_linked_issue"] });
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number: i, title: `PR ${i}`, state: "closed", merged_at: i <= 4 ? "2026-06-01T00:00:00.000Z" : null } as never);
+    }
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+    await processJob(env, { type: "ops-alerts", requestedBy: "test" });
+    expect(errors.mock.calls.map((c) => String(c[0])).some((line) => line.includes("ops_anomaly") && line.includes("owner/repo"))).toBe(true);
+    errors.mockRestore();
+  });
+
+  it("ops-alerts job no-ops when a present ops manifest override turns it OFF even though LOOPOVER_REVIEW_OPS is ON (#6275)", async () => {
+    const env = createTestEnv({ LOOPOVER_REVIEW_OPS: "true" });
+    await upsertRepoFocusManifest(env, "JSONbored/gittensory", { ops: { enabled: false } });
+    await env.DB.prepare("INSERT INTO repositories (full_name, owner, name, is_installed, is_registered) VALUES (?, ?, ?, 1, 1)")
+      .bind("owner/repo", "owner", "repo")
+      .run();
+    for (let i = 1; i <= 6; i += 1) {
+      await recordGateBlockOutcome(env, { repoFullName: "owner/repo", pullNumber: i, blockerCodes: ["missing_linked_issue"] });
+      await upsertPullRequestFromGitHub(env, "owner/repo", { number: i, title: `PR ${i}`, state: "closed", merged_at: i <= 4 ? "2026-06-01T00:00:00.000Z" : null } as never);
+    }
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    await processJob(env, { type: "ops-alerts", requestedBy: "test" });
+    expect(warn.mock.calls.map((c) => String(c[0])).some((line) => line.includes("ops_anomaly"))).toBe(false);
+    warn.mockRestore();
   });
 
   it("sweep-liveness-watchdog job no-ops when LOOPOVER_SWEEP_WATCHDOG is OFF (does no scan, no re-enqueue)", async () => {

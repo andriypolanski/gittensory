@@ -1,8 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 
 // Force the (otherwise fail-safe) stats computation to throw, so the route's defensive 503 catch is exercised.
+// resolvePublicStatsManifestOverride is mocked too (#6275) -- the real module export the route also imports;
+// `present: false` so isPublicStatsEnabled falls through to the mocked always-true check above, unaffected.
 vi.mock("../../src/review/public-stats", () => ({
   isPublicStatsEnabled: () => true,
+  resolvePublicStatsManifestOverride: () => Promise.resolve({ present: false, enabled: false }),
   getPublicStats: () => Promise.reject(new Error("stats boom")),
 }));
 

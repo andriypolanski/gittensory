@@ -102,6 +102,10 @@ maintainerRecap:
   enabled: true
   cadence: daily
   channel: discord
+ops:
+  enabled: true
+publicStats:
+  enabled: false
 `,
     });
     expect(result.status).toBe("ok");
@@ -116,12 +120,16 @@ maintainerRecap:
       repoDocGeneration: { enabled: true, scope: ["agents"] },
       reviewRecap: { enabled: true, cadenceDays: 14 },
       maintainerRecap: { enabled: true, cadence: "daily", channel: "discord" },
+      ops: { enabled: true },
+      publicStats: { enabled: false },
     });
   });
 
-  it("omits maintainerRecap from the normalized output when it is not configured", () => {
+  it("omits maintainerRecap/ops/publicStats from the normalized output when none are configured", () => {
     const result = buildFocusManifestValidation({ content: "wantedPaths: [src/]\n" });
     expect(result.normalized).not.toHaveProperty("maintainerRecap");
+    expect(result.normalized).not.toHaveProperty("ops");
+    expect(result.normalized).not.toHaveProperty("publicStats");
   });
 
   it("returns error when manifest content is not a mapping", () => {

@@ -1,17 +1,22 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
 import { recordAiUsageEvent, recordAuditEvent, recordGateBlockOutcome, updatePullRequestSlopAssessment, upsertPullRequestFromGitHub } from "../../src/db/repositories";
 import {
   classifyAnomalySeverity,
+  clearOpsManifestOverrideCacheForTest,
   computeOpsStats,
   detectOutcomeAnomalies,
   isOpsEnabled,
+  resolveOpsManifestOverride,
   type RepoOutcomeSnapshot,
   runOpsAlerts,
   worstAnomaly,
 } from "../../src/review/ops-wire";
 import { counterValue, resetMetrics, setSelfHostedMetricsMode } from "../../src/selfhost/metrics";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import { createTestEnv } from "../helpers/d1";
+
+const SELF_REPO = "JSONbored/gittensory";
 
 // Wrap env.DB.prepare so any SQL matching `pattern` throws, exercising a fail-safe catch; every other
 // query delegates to the real test DB unchanged.
@@ -49,6 +54,77 @@ describe("isOpsEnabled — default OFF, truthy convention", () => {
   it("is OFF for unset / false / empty, ON for 1/true/yes/on", () => {
     for (const off of [undefined, "", "false", "no", "0", "off"]) expect(isOpsEnabled({ LOOPOVER_REVIEW_OPS: off })).toBe(false);
     for (const on of ["1", "true", "yes", "on", "TRUE", "On"]) expect(isOpsEnabled({ LOOPOVER_REVIEW_OPS: on })).toBe(true);
+  });
+
+  it("a present manifest override wins outright over the env flag, in both directions (#6275)", () => {
+    expect(isOpsEnabled({ LOOPOVER_REVIEW_OPS: "false" }, { present: true, enabled: true })).toBe(true);
+    expect(isOpsEnabled({ LOOPOVER_REVIEW_OPS: "true" }, { present: true, enabled: false })).toBe(false);
+  });
+
+  it("falls back to the env flag when the manifest override is not present", () => {
+    expect(isOpsEnabled({ LOOPOVER_REVIEW_OPS: "true" }, { present: false, enabled: false })).toBe(true);
+    expect(isOpsEnabled({ LOOPOVER_REVIEW_OPS: "false" }, undefined)).toBe(false);
+  });
+});
+
+describe("resolveOpsManifestOverride — config-as-code lookup (#6275)", () => {
+  beforeEach(() => {
+    clearOpsManifestOverrideCacheForTest();
+  });
+
+  it("returns the self-repo's configured ops block when present", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
+
+    expect(await resolveOpsManifestOverride(env)).toEqual({ present: true, enabled: true });
+  });
+
+  it("returns present: false when the self-repo has no ops block configured", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
+
+    expect(await resolveOpsManifestOverride(env)).toEqual({ present: false, enabled: false });
+  });
+
+  it("degrades to present: false (never throws) when the manifest load itself fails", async () => {
+    const env = createTestEnv();
+    // loadRepoFocusManifest reads signal_snapshots (the persisted-record cache) before any live fetch fallback.
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = ((sql: string) => {
+      if (/"signal_snapshots"|signal_snapshots/i.test(sql)) throw new Error("poisoned query");
+      return realPrepare(sql);
+    }) as typeof env.DB.prepare;
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("network down");
+    });
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(await resolveOpsManifestOverride(env)).toEqual({ present: false, enabled: false });
+    expect(warnings.mock.calls.map((c) => String(c[0])).some((line) => line.includes("ops_manifest_override_error"))).toBe(true);
+    vi.unstubAllGlobals();
+  });
+
+  it("within the 60s TTL, reuses the cached override instead of re-reading the manifest (#6372 perf)", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
+    const t0 = Date.parse("2026-07-16T00:00:00Z");
+    expect(await resolveOpsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
+
+    // A poisoned DB proves the second call never re-reads -- it must serve the cached value.
+    env.DB.prepare = (() => {
+      throw new Error("should not be queried on a cache hit");
+    }) as typeof env.DB.prepare;
+    expect(await resolveOpsManifestOverride(env, t0 + 30_000)).toEqual({ present: true, enabled: true });
+  });
+
+  it("re-reads the manifest once the 60s TTL has elapsed", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
+    const t0 = Date.parse("2026-07-16T00:00:00Z");
+    expect(await resolveOpsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
+
+    await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: false } });
+    expect(await resolveOpsManifestOverride(env, t0 + 60_001)).toEqual({ present: true, enabled: false });
   });
 });
 
@@ -609,6 +685,9 @@ describe("computeOpsStats — cross-repo outcome aggregate", () => {
 
 describe("GET /v1/internal/ops/stats — bearer-gated, flag-gated endpoint", () => {
   const bearer = (env: Env) => ({ authorization: `Bearer ${env.INTERNAL_JOB_TOKEN}` });
+  beforeEach(() => {
+    clearOpsManifestOverrideCacheForTest();
+  });
 
   it("401s without the internal token (the /v1/internal/* middleware gate)", async () => {
     const app = createApp();
@@ -634,5 +713,21 @@ describe("GET /v1/internal/ops/stats — bearer-gated, flag-gated endpoint", () 
     expect(res.status).toBe(200);
     const body = (await res.json()) as { repos: Array<{ repoFullName: string; anomalies: string[] }> };
     expect(body.repos.some((r) => r.repoFullName === "owner/repo" && r.anomalies.length > 0)).toBe(true);
+  });
+
+  it("a present ops manifest override turns the endpoint ON even when LOOPOVER_REVIEW_OPS is OFF (#6275)", async () => {
+    const app = createApp();
+    const env = createTestEnv(); // flag unset → OFF
+    await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: true } });
+    const res = await app.request("/v1/internal/ops/stats", { headers: bearer(env) }, env);
+    expect(res.status).toBe(200);
+  });
+
+  it("a present ops manifest override turns the endpoint OFF even when LOOPOVER_REVIEW_OPS is ON (#6275)", async () => {
+    const app = createApp();
+    const env = createTestEnv({ LOOPOVER_REVIEW_OPS: "true" });
+    await upsertRepoFocusManifest(env, SELF_REPO, { ops: { enabled: false } });
+    const res = await app.request("/v1/internal/ops/stats", { headers: bearer(env) }, env);
+    expect(res.status).toBe(404);
   });
 });

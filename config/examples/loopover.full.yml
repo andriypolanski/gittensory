@@ -1236,3 +1236,18 @@ settings:
 #   enabled: true         # Bool. Default: false (env vars decide instead).
 #   cadence: weekly        # daily | weekly. Default: weekly. Invalid values fall back to weekly.
 #   channel: discord       # discord (only supported channel today). Invalid values fall back to discord.
+
+# Fleet-wide ops-alert scanning cron (#6275): config-as-code override for the hourly anomaly scan over
+# loopover's own review-outcome data (LOOPOVER_REVIEW_OPS). Operator-level, not per-repo -- there is no
+# per-repo activation check for this cron, so this block is only meaningful on the loopover self-repo's own
+# manifest (the repo this instance identifies as); a present block there wins over the LOOPOVER_REVIEW_OPS
+# env var, which stays the fallback when absent.
+# ops:
+#   enabled: true   # Bool. Default: false (the env var decides instead).
+
+# Public "proof of power" stats API (#6275): config-as-code override for the LOOPOVER_PUBLIC_STATS flag
+# gating the unauthenticated `/v1/public/stats` endpoint. Same shape and precedence as `ops:` above --
+# fleet-wide, only meaningful on the loopover self-repo's own manifest; a present block there wins over the
+# LOOPOVER_PUBLIC_STATS env var, which stays the fallback when absent.
+# publicStats:
+#   enabled: true   # Bool. Default: false (the env var decides instead).

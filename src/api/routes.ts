@@ -263,13 +263,13 @@ import { buildFocusManifestValidation } from "../services/focus-manifest-validat
 import { buildMaintainerActivationPreview, recommendedAdvisoryActivationSettings } from "../services/maintainer-activation";
 import { buildRepoOutcomeCalibration } from "../services/outcome-calibration";
 import { loadGatePrecisionReport } from "../services/gate-precision";
-import { computeOpsStats, isOpsEnabled } from "../review/ops-wire";
+import { computeOpsStats, isOpsEnabled, resolveOpsManifestOverride } from "../review/ops-wire";
 import { deleteLiveOverride, listOverrideAudit, loadOverride, loadShadowOverride, sanitizeOverridePayload, type StorageEnv } from "../review/auto-apply";
 import { handleInternalCalibration, handleInternalDecision, type OpsAgentConfig } from "../review/ops";
 import { computeParityReadiness, isParityAuditEnabled } from "../review/parity-wire";
 import { computePredictedGateAgreement } from "../review/predicted-gate-agreement";
 import { isRagEnabled } from "../review/rag-wire";
-import { getPublicStats, isPublicStatsEnabled } from "../review/public-stats";
+import { getPublicStats, isPublicStatsEnabled, resolvePublicStatsManifestOverride } from "../review/public-stats";
 import { loadPublicAccuracyTrend } from "../services/public-accuracy-trend";
 import { loadPublicReuseRateTrend } from "../services/public-reuse-rate-trend";
 import { loadPublicReviewVolumeTrend } from "../services/public-review-volume-trend";
@@ -1015,10 +1015,13 @@ export function createApp() {
 
   // Proof of Power (#1059): unauthenticated homepage stats counter — lifetime PRs handled / merged / closed,
   // gate + slop blocks, and a reversal-grounded accuracy %. Aggregate counts only (no PR content, authors,
-  // scores, or reward internals). Flag-gated: 404s when LOOPOVER_PUBLIC_STATS is off so the worker is
-  // byte-identical to today. Excluded from requiresApiToken below.
+  // scores, or reward internals). Flag-gated: 404s when disabled so the worker is byte-identical to today.
+  // Enable can ALSO be set as code via the loopover self-repo's `.loopover.yml publicStats:` block
+  // (config-as-code parity, #6275) -- a present manifest block wins over LOOPOVER_PUBLIC_STATS; absent, the
+  // env var decides exactly as before. Excluded from requiresApiToken below.
   app.get("/v1/public/stats", async (c) => {
-    if (!isPublicStatsEnabled(c.env)) return c.json({ error: "not_found" }, 404);
+    const publicStatsManifestOverride = await resolvePublicStatsManifestOverride(c.env);
+    if (!isPublicStatsEnabled(c.env, publicStatsManifestOverride)) return c.json({ error: "not_found" }, 404);
     try {
       const [stats, accuracyTrend, reuseRateTrend, reviewVolumeTrend] = await Promise.all([
         getPublicStats(c.env),
@@ -3782,9 +3785,13 @@ export function createApp() {
   // Convergence (ops / observability, flag LOOPOVER_REVIEW_OPS). Cross-repo review-OUTCOME aggregate (gate-block
   // ledger + recommendation/slop calibration) for an operator dashboard. Bearer-gated by the `/v1/internal/*`
   // middleware above (INTERNAL_JOB_TOKEN). Flag-OFF (default) → 404, so the endpoint does not exist and the
-  // worker is byte-identical to today. Aggregate counts only — no PR content / actor logins.
+  // worker is byte-identical to today. Enable can ALSO be set as code via the loopover self-repo's
+  // `.loopover.yml ops:` block (config-as-code parity, #6275), the SAME override the cron gate honors — so this
+  // dashboard endpoint can never disagree with whether the scan itself is actually running. Aggregate counts
+  // only — no PR content / actor logins.
   app.get("/v1/internal/ops/stats", async (c) => {
-    if (!isOpsEnabled(c.env)) return c.json({ error: "not_found" }, 404);
+    const opsManifestOverride = await resolveOpsManifestOverride(c.env);
+    if (!isOpsEnabled(c.env, opsManifestOverride)) return c.json({ error: "not_found" }, 404);
     return c.json(await computeOpsStats(c.env));
   });
 

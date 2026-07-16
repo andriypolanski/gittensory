@@ -35,6 +35,9 @@
 // `github_app.pr_public_surface_published` audit events this file's own disposition query reads, so the two sums
 // are over disjoint PR sets and can be added directly.
 import { getOrbGlobalStats } from "../orb/outcomes";
+import { loadRepoFocusManifest } from "../signals/focus-manifest-loader";
+import { resolveLoopOverSelfRepoFullName } from "../config/loopover-repo-focus-manifest";
+import { errorMessage } from "../utils/json";
 
 /** FALLBACK estimate of maintainer review/triage time saved per reviewed PR, used ONLY when the real per-PR
  *  average (`estimateReviewEffort`'s minutes, persisted at publish time — see `reviewEffortMinutes` in the
@@ -43,11 +46,68 @@ import { getOrbGlobalStats } from "../orb/outcomes";
  *  documented degrade rather than removed, since a historical ledger genuinely has no other number to report.) */
 export const MINUTES_SAVED_PER_PR = 20;
 
-/** Truthy-string flag check, matching ops-wire / selftune-wire. */
-export function isPublicStatsEnabled(env: {
-  LOOPOVER_PUBLIC_STATS?: string | undefined;
-}): boolean {
+/** A manifest-sourced enable override (#6275) -- the `publicStats` block of the loopover self-repo's
+ *  `.loopover.yml` (see FocusManifestPublicStatsConfig). `present: false` (no block, or the repo has no
+ *  manifest at all) means "no override configured", not "disabled" -- the caller falls through to the env
+ *  var in that case, exactly as if this parameter were omitted. Mirrors OpsManifestOverride (ops-wire.ts) /
+ *  MaintainerRecapManifestOverride (maintainer-recap-wire.ts). */
+export type PublicStatsManifestOverride = { present: boolean; enabled: boolean };
+
+/** Truthy-string flag check, matching ops-wire / selftune-wire. Config-as-code (#6275): a present
+ *  `publicStats` manifest block on the loopover self-repo wins outright; otherwise falls back to the
+ *  LOOPOVER_PUBLIC_STATS env flag (default OFF -- the endpoint 404s). */
+export function isPublicStatsEnabled(
+  env: { LOOPOVER_PUBLIC_STATS?: string | undefined },
+  manifestOverride?: PublicStatsManifestOverride | undefined,
+): boolean {
+  if (manifestOverride?.present) return manifestOverride.enabled;
   return /^(1|true|yes|on)$/i.test(env.LOOPOVER_PUBLIC_STATS ?? "");
+}
+
+// Short in-isolate TTL cache for resolvePublicStatsManifestOverride, mirroring review-memory-wire.ts's
+// reviewSuppressionCache: `/v1/public/stats` is unauthenticated and publicly hot (the homepage counter), and
+// the override always resolves to the SAME repo (resolveLoopOverSelfRepoFullName is fleet-wide, not per-caller),
+// so a single slot is enough -- no need for review-memory's Map keyed by repoFullName. Without this, every
+// request re-triggers loadRepoFocusManifest's own persisted-snapshot read (a D1 query even on a cache hit,
+// occasionally a live GitHub fetch on THAT cache's 6h expiry) on a path that previously did zero I/O at all.
+// The operator's `.loopover.yml publicStats:` block changes rarely, so a 60s window (same TTL review-memory
+// uses) is a reasonable staleness bound in exchange for collapsing a Worker isolate's many requests/minute
+// down to about one manifest load per minute.
+const PUBLIC_STATS_MANIFEST_OVERRIDE_CACHE_TTL_MS = 60_000;
+let publicStatsManifestOverrideCache: { override: PublicStatsManifestOverride; at: number } | null = null;
+
+/**
+ * Config-as-code override lookup (#6275): read the `publicStats` block off the loopover self-repo's
+ * `.loopover.yml` (resolveLoopOverSelfRepoFullName) -- the public stats endpoint is a fleet-wide,
+ * operator-level setting, not a per-repo one (there is no repo context at the route handler's activation
+ * check), so ONE designated repo's manifest stands in for "the operator's own config", the same way
+ * maintainerRecap (#2250) / ops (#6275, ops-wire.ts) already do. A manifest load failure (network blip,
+ * malformed YAML) degrades to `{ present: false }` -- the caller then falls through to the env var, exactly
+ * as if no override existed, so a manifest hiccup can never accidentally expose or hide the endpoint.
+ * `nowMs` defaults to `Date.now()` (mirrors `getPublicStats` above) so callers need no change, while tests
+ * can pass a deterministic value to exercise the TTL precisely.
+ */
+export async function resolvePublicStatsManifestOverride(env: Env, nowMs: number = Date.now()): Promise<PublicStatsManifestOverride> {
+  const hit = publicStatsManifestOverrideCache;
+  if (hit && nowMs - hit.at < PUBLIC_STATS_MANIFEST_OVERRIDE_CACHE_TTL_MS) return hit.override;
+  try {
+    const manifest = await loadRepoFocusManifest(env, resolveLoopOverSelfRepoFullName(env));
+    const config = manifest.publicStats;
+    const override = { present: config.present, enabled: config.enabled };
+    publicStatsManifestOverrideCache = { override, at: nowMs };
+    return override;
+  } catch (error) {
+    console.warn(JSON.stringify({ event: "public_stats_manifest_override_error", message: errorMessage(error).slice(0, 200) }));
+    const override = { present: false, enabled: false };
+    publicStatsManifestOverrideCache = { override, at: nowMs };
+    return override;
+  }
+}
+
+/** Test-only: clears the cached override, mirroring clearReviewSuppressionCacheForTest. Without this, a test
+ *  suite running many cases would leak one test's cached override into the next under fake/fixed timers. */
+export function clearPublicStatsManifestOverrideCacheForTest(): void {
+  publicStatsManifestOverrideCache = null;
 }
 
 /** Storage seam: loopover's `Env` is a global ambient interface with `DB` (mirrors src/review/stats.ts). */

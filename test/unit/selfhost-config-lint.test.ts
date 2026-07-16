@@ -102,6 +102,22 @@ reviewRecap:
     expect(result.recognizedFields).toEqual(["maintainerRecap"]);
   });
 
+  it("recognizes a standalone ops: block instead of flagging it as unknown (#6275)", () => {
+    const result = lintManifestText("ops:\n  enabled: true\n");
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(result.recognizedFields).toEqual(["ops"]);
+  });
+
+  it("recognizes a standalone publicStats: block instead of flagging it as unknown (#6275)", () => {
+    const result = lintManifestText("publicStats:\n  enabled: false\n");
+
+    expect(result.ok).toBe(true);
+    expect(result.warnings).toEqual([]);
+    expect(result.recognizedFields).toEqual(["publicStats"]);
+  });
+
   it("flags legacy blockedPaths with a migration-specific warning, not the generic unknown-field message", () => {
     const result = lintManifestText("wantedPaths: [src/]\nblockedPaths: [dist/]\n");
 

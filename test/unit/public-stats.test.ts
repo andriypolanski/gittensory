@@ -1,10 +1,15 @@
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { createTestEnv } from "../helpers/d1";
+import { upsertRepoFocusManifest } from "../../src/signals/focus-manifest-loader";
 import {
+  clearPublicStatsManifestOverrideCacheForTest,
   getPublicStats,
   isPublicStatsEnabled,
   MINUTES_SAVED_PER_PR,
+  resolvePublicStatsManifestOverride,
 } from "../../src/review/public-stats";
+
+const SELF_REPO = "JSONbored/gittensory";
 
 type Row = Record<string, unknown>;
 
@@ -59,6 +64,79 @@ describe("isPublicStatsEnabled", () => {
       expect(isPublicStatsEnabled({ LOOPOVER_PUBLIC_STATS: v })).toBe(true);
     for (const v of ["", "0", "false", "off", "no", undefined])
       expect(isPublicStatsEnabled({ LOOPOVER_PUBLIC_STATS: v })).toBe(false);
+  });
+
+  it("a present manifest override wins outright over the env flag, in both directions (#6275)", () => {
+    expect(isPublicStatsEnabled({ LOOPOVER_PUBLIC_STATS: "false" }, { present: true, enabled: true })).toBe(true);
+    expect(isPublicStatsEnabled({ LOOPOVER_PUBLIC_STATS: "true" }, { present: true, enabled: false })).toBe(false);
+  });
+
+  it("falls back to the env flag when the manifest override is not present", () => {
+    expect(isPublicStatsEnabled({ LOOPOVER_PUBLIC_STATS: "true" }, { present: false, enabled: false })).toBe(true);
+    expect(isPublicStatsEnabled({ LOOPOVER_PUBLIC_STATS: "false" }, undefined)).toBe(false);
+  });
+});
+
+describe("resolvePublicStatsManifestOverride — config-as-code lookup (#6275)", () => {
+  beforeEach(() => {
+    clearPublicStatsManifestOverrideCacheForTest();
+  });
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("returns the self-repo's configured publicStats block when present", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: true } });
+
+    expect(await resolvePublicStatsManifestOverride(env)).toEqual({ present: true, enabled: true });
+  });
+
+  it("returns present: false when the self-repo has no publicStats block configured", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { wantedPaths: ["src/"] });
+
+    expect(await resolvePublicStatsManifestOverride(env)).toEqual({ present: false, enabled: false });
+  });
+
+  it("degrades to present: false (never throws) when the manifest load itself fails", async () => {
+    const env = createTestEnv();
+    // loadRepoFocusManifest reads signal_snapshots (the persisted-record cache) before any live fetch fallback.
+    const realPrepare = env.DB.prepare.bind(env.DB);
+    env.DB.prepare = ((sql: string) => {
+      if (/"signal_snapshots"|signal_snapshots/i.test(sql)) throw new Error("poisoned query");
+      return realPrepare(sql);
+    }) as typeof env.DB.prepare;
+    vi.stubGlobal("fetch", async () => {
+      throw new Error("network down");
+    });
+    const warnings = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    expect(await resolvePublicStatsManifestOverride(env)).toEqual({ present: false, enabled: false });
+    expect(warnings.mock.calls.map((c) => String(c[0])).some((line) => line.includes("public_stats_manifest_override_error"))).toBe(true);
+  });
+
+  it("within the 60s TTL, reuses the cached override instead of re-reading the manifest (#6372 perf)", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: true } });
+    const t0 = Date.parse("2026-07-16T00:00:00Z");
+    expect(await resolvePublicStatsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
+
+    // A poisoned DB proves the second call never re-reads -- it must serve the cached value.
+    env.DB.prepare = (() => {
+      throw new Error("should not be queried on a cache hit");
+    }) as typeof env.DB.prepare;
+    expect(await resolvePublicStatsManifestOverride(env, t0 + 30_000)).toEqual({ present: true, enabled: true });
+  });
+
+  it("re-reads the manifest once the 60s TTL has elapsed", async () => {
+    const env = createTestEnv();
+    await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: true } });
+    const t0 = Date.parse("2026-07-16T00:00:00Z");
+    expect(await resolvePublicStatsManifestOverride(env, t0)).toEqual({ present: true, enabled: true });
+
+    await upsertRepoFocusManifest(env, SELF_REPO, { publicStats: { enabled: false } });
+    expect(await resolvePublicStatsManifestOverride(env, t0 + 60_001)).toEqual({ present: true, enabled: false });
   });
 });
 

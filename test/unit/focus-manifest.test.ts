@@ -41,6 +41,8 @@ import {
   parseReviewConfigMapping,
   reviewRecapConfigToJson,
   maintainerRecapConfigToJson,
+  opsConfigToJson,
+  publicStatsConfigToJson,
   settingsOverrideToJson,
   type FocusManifest,
   type FocusManifestContentLaneConfig,
@@ -50,6 +52,8 @@ import {
   type FocusManifestReviewConfig,
   type FocusManifestReviewRecapConfig,
   type FocusManifestMaintainerRecapConfig,
+  type FocusManifestOpsConfig,
+  type FocusManifestPublicStatsConfig,
   type FocusManifestSettings,
   type SelfHostAiModelConfig,
 } from "../../src/signals/focus-manifest";
@@ -470,6 +474,22 @@ describe(".loopover.yml.example field-exhaustiveness (#1670)", () => {
   } satisfies Record<Exclude<keyof FocusManifestMaintainerRecapConfig, "present">, string>;
 
   it.each(Object.entries(MAINTAINER_RECAP_FIELD_TOKENS))("documents maintainerRecap.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const OPS_FIELD_TOKENS = {
+    enabled: "enabled:",
+  } satisfies Record<Exclude<keyof FocusManifestOpsConfig, "present">, string>;
+
+  it.each(Object.entries(OPS_FIELD_TOKENS))("documents ops.%s", (_field, token) => {
+    expect(exampleContent).toContain(token);
+  });
+
+  const PUBLIC_STATS_FIELD_TOKENS = {
+    enabled: "enabled:",
+  } satisfies Record<Exclude<keyof FocusManifestPublicStatsConfig, "present">, string>;
+
+  it.each(Object.entries(PUBLIC_STATS_FIELD_TOKENS))("documents publicStats.%s", (_field, token) => {
     expect(exampleContent).toContain(token);
   });
 });
@@ -897,6 +917,8 @@ describe("compileFocusManifestPolicy", () => {
       repoDocGeneration: { present: false, enabled: false, scope: ["agents"], allowOverwriteExisting: false, refreshIntervalDays: 7 },
       reviewRecap: { present: false, enabled: false, cadenceDays: 7 },
       maintainerRecap: { present: false, enabled: false, cadence: "weekly", channel: "discord" },
+      ops: { present: false, enabled: false },
+      publicStats: { present: false, enabled: false },
       warnings: [],
     });
     expect(policy.publicSafe.entryGuidance).toContain("Keep PRs focused.");
@@ -1897,6 +1919,102 @@ describe("parseFocusManifest gate config", () => {
 
     it("maintainerRecapConfigToJson returns null for an absent config", () => {
       expect(maintainerRecapConfigToJson(parseFocusManifest(null).maintainerRecap)).toBeNull();
+    });
+  });
+
+  describe("ops: (#6275, fleet-wide ops-alert scanning cron config-as-code override)", () => {
+    it("defaults to fully disabled/absent when the key is omitted, and does not make the manifest present on its own", () => {
+      const m = parseFocusManifest({});
+      expect(m.ops).toEqual({ present: false, enabled: false });
+      expect(m.present).toBe(false);
+    });
+
+    it("treats an explicit null the same as an omitted key", () => {
+      expect(parseFocusManifest({ ops: null }).ops).toEqual({ present: false, enabled: false });
+    });
+
+    it("warns and falls back to the default when the value is a non-mapping type (string or array)", () => {
+      const asString = parseFocusManifest({ ops: "nope" as never });
+      expect(asString.ops.present).toBe(false);
+      expect(asString.warnings.some((w) => /"ops" must be a mapping/.test(w))).toBe(true);
+      const asArray = parseFocusManifest({ ops: ["nope"] as never });
+      expect(asArray.ops.present).toBe(false);
+      expect(asArray.warnings.some((w) => /"ops" must be a mapping/.test(w))).toBe(true);
+    });
+
+    it("parses enabled: true, making the manifest present", () => {
+      const m = parseFocusManifest({ ops: { enabled: true } });
+      expect(m.ops).toEqual({ present: true, enabled: true });
+      expect(m.present).toBe(true);
+    });
+
+    it("parses enabled: false explicitly, still marking the manifest present (present is a real override, off)", () => {
+      const m = parseFocusManifest({ ops: { enabled: false } });
+      expect(m.ops).toEqual({ present: true, enabled: false });
+      expect(m.present).toBe(true);
+    });
+
+    it("warns and defaults to false when enabled is a non-boolean value", () => {
+      const m = parseFocusManifest({ ops: { enabled: "yes" as unknown as boolean } });
+      expect(m.ops.enabled).toBe(false);
+      expect(m.warnings.some((w) => /ops\.enabled/.test(w))).toBe(true);
+    });
+
+    it("round-trips through opsConfigToJson → parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ ops: { enabled: true } });
+      expect(parseFocusManifest({ ops: opsConfigToJson(m.ops) }).ops).toEqual(m.ops);
+    });
+
+    it("opsConfigToJson returns null for an absent config", () => {
+      expect(opsConfigToJson(parseFocusManifest(null).ops)).toBeNull();
+    });
+  });
+
+  describe("publicStats: (#6275, public /v1/public/stats endpoint config-as-code override)", () => {
+    it("defaults to fully disabled/absent when the key is omitted, and does not make the manifest present on its own", () => {
+      const m = parseFocusManifest({});
+      expect(m.publicStats).toEqual({ present: false, enabled: false });
+      expect(m.present).toBe(false);
+    });
+
+    it("treats an explicit null the same as an omitted key", () => {
+      expect(parseFocusManifest({ publicStats: null }).publicStats).toEqual({ present: false, enabled: false });
+    });
+
+    it("warns and falls back to the default when the value is a non-mapping type (string or array)", () => {
+      const asString = parseFocusManifest({ publicStats: "nope" as never });
+      expect(asString.publicStats.present).toBe(false);
+      expect(asString.warnings.some((w) => /"publicStats" must be a mapping/.test(w))).toBe(true);
+      const asArray = parseFocusManifest({ publicStats: ["nope"] as never });
+      expect(asArray.publicStats.present).toBe(false);
+      expect(asArray.warnings.some((w) => /"publicStats" must be a mapping/.test(w))).toBe(true);
+    });
+
+    it("parses enabled: true, making the manifest present", () => {
+      const m = parseFocusManifest({ publicStats: { enabled: true } });
+      expect(m.publicStats).toEqual({ present: true, enabled: true });
+      expect(m.present).toBe(true);
+    });
+
+    it("parses enabled: false explicitly, still marking the manifest present (present is a real override, off)", () => {
+      const m = parseFocusManifest({ publicStats: { enabled: false } });
+      expect(m.publicStats).toEqual({ present: true, enabled: false });
+      expect(m.present).toBe(true);
+    });
+
+    it("warns and defaults to false when enabled is a non-boolean value", () => {
+      const m = parseFocusManifest({ publicStats: { enabled: "yes" as unknown as boolean } });
+      expect(m.publicStats.enabled).toBe(false);
+      expect(m.warnings.some((w) => /publicStats\.enabled/.test(w))).toBe(true);
+    });
+
+    it("round-trips through publicStatsConfigToJson → parseFocusManifest unchanged", () => {
+      const m = parseFocusManifest({ publicStats: { enabled: true } });
+      expect(parseFocusManifest({ publicStats: publicStatsConfigToJson(m.publicStats) }).publicStats).toEqual(m.publicStats);
+    });
+
+    it("publicStatsConfigToJson returns null for an absent config", () => {
+      expect(publicStatsConfigToJson(parseFocusManifest(null).publicStats)).toBeNull();
     });
   });
 

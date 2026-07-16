@@ -19,6 +19,8 @@ const TOP_LEVEL_FIELDS = [
   "repoDocGeneration",
   "reviewRecap",
   "maintainerRecap",
+  "ops",
+  "publicStats",
 ] as const;
 
 const TOP_LEVEL_FIELD_SET = new Set<string>(TOP_LEVEL_FIELDS);
