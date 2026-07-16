@@ -531,6 +531,15 @@ export const pullRequests = sqliteTable(
     // new head. loopover-computed (publish-written), omitted from the GitHub-sync SET clause so a later sync
     // cannot clobber it.
     visualCaptureSatisfiedSha: text("visual_capture_satisfied_sha"),
+    // Screenshot-table PRESENCE-mode staleness correlation (#stale-screenshot-table-fix, follow-up to #2006).
+    // JSON `{headSha, evidenceFingerprint}` -- the head SHA and before/after-image-URL fingerprint that last
+    // satisfied screenshotTableGate's presence-mode check (see evaluateScreenshotTableGate's staleness comment).
+    // Unlike visual_capture_satisfied_sha above, presence mode has no bot-verified render to key on, so this
+    // stores BOTH the head it was satisfied at AND a fingerprint of the exact evidence -- a later push (new
+    // head) carrying the SAME UNCHANGED evidence is stale and must re-violate; a genuinely different fingerprint
+    // (the contributor re-affirmed) refreshes it. loopover-computed (planner-written), omitted from the
+    // GitHub-sync SET clause so a later sync cannot clobber it.
+    screenshotTablePresenceSatisfiedJson: text("screenshot_table_presence_satisfied_json"),
     createdAt: text("created_at").notNull().$defaultFn(() => nowIso()),
     updatedAt: text("updated_at").notNull().$defaultFn(() => nowIso()),
   },

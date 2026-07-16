@@ -4049,6 +4049,24 @@ export async function markPullRequestVisualCaptureSatisfied(env: Env, fullName: 
     .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, headSha)));
 }
 
+/** Screenshot-table PRESENCE-mode staleness correlation (#stale-screenshot-table-fix): record the (headSha,
+ *  evidenceFingerprint) checkpoint at which evaluateScreenshotTableGate's presence-mode check just satisfied
+ *  the gate for this PR (see that function's `presenceModeSatisfiedState` result field and staleness comment).
+ *  Mirrors markPullRequestVisualCaptureSatisfied's headSha-scoped WHERE (a live head that advanced between
+ *  evaluation and this write makes the UPDATE no-op rather than stamp a stale head). */
+export async function markPullRequestScreenshotTablePresenceSatisfied(
+  env: Env,
+  fullName: string,
+  number: number,
+  state: { headSha: string; evidenceFingerprint: string },
+): Promise<void> {
+  const db = getDb(env.DB);
+  await db
+    .update(pullRequests)
+    .set({ screenshotTablePresenceSatisfiedJson: jsonString(state), updatedAt: nowIso() })
+    .where(and(eq(pullRequests.repoFullName, fullName), eq(pullRequests.number, number), eq(pullRequests.headSha, state.headSha)));
+}
+
 /** Sweep convergence: stamp the timestamp the scheduled re-gate sweep just recomputed this PR. A plain D1 UPDATE
  *  — NOT routed through the agent-action-executor chokepoint (#1258) — so it advances even when GitHub writes are
  *  suppressed (dry-run / paused). selectRegateCandidates orders the sweep by last_regated_at, so a just-regated PR
@@ -6454,6 +6472,7 @@ function toPullRequestRecordFromRow(row: typeof pullRequests.$inferSelect): Pull
     linkedIssueHardRuleViolatedAt: row.linkedIssueHardRuleViolatedAt,
     linkedIssueHardRuleViolationReason: row.linkedIssueHardRuleViolationReason,
     visualCaptureSatisfiedSha: row.visualCaptureSatisfiedSha,
+    screenshotTablePresenceSatisfied: parseJson<{ headSha: string; evidenceFingerprint: string } | null>(row.screenshotTablePresenceSatisfiedJson, null),
   };
 }
 

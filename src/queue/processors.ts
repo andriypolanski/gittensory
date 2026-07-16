@@ -55,6 +55,7 @@ import {
   markPullRequestReviewsInvalidated,
   markPullRequestSurfacePublished,
   markPullRequestVisualCaptureSatisfied,
+  markPullRequestScreenshotTablePresenceSatisfied,
   getLatestRegatedAt,
   getLatestBacklogConvergenceRegatedAt,
   claimRegateFanoutSlot,
@@ -2762,11 +2763,31 @@ async function runAgentMaintenancePlanAndExecute(
     prLabels: pr.labels,
     changedFiles: changedPaths,
     botCaptureSatisfied,
+    headSha: pr.headSha,
+    presenceModeSatisfied: pr.screenshotTablePresenceSatisfied,
   });
   const screenshotTableMatch =
     screenshotTableGateResult.violated && screenshotTableGateConfig.action === "close"
       ? { matched: true, reason: screenshotTableGateResult.reason }
       : undefined;
+  // #stale-screenshot-table-fix: presence mode just independently re-confirmed the gate for THIS head SHA --
+  // persist the (headSha, evidenceFingerprint) checkpoint so a LATER push that carries the SAME UNCHANGED
+  // evidence correctly re-violates instead of silently staying green forever (see evaluateScreenshotTableGate's
+  // staleness comment). Best-effort, mirrors markPullRequestVisualCaptureSatisfied's call site: a write failure
+  // here just means the next evaluation can't tell this evidence was already checked, never blocks the rest of
+  // the maintenance pass.
+  if (screenshotTableGateResult.presenceModeSatisfiedState) {
+    await markPullRequestScreenshotTablePresenceSatisfied(env, repoFullName, pr.number, screenshotTableGateResult.presenceModeSatisfiedState).catch((error) => {
+      console.log(
+        JSON.stringify({
+          event: "screenshot_table_presence_satisfied_mark_failed",
+          repoFullName,
+          pull: pr.number,
+          message: errorMessage(error).slice(0, 200),
+        }),
+      );
+    });
+  }
 
   // Account-age throttle (#2561, anti-abuse): a friction/visibility signal for the classic ban-evasion pattern
   // (a banned login gets a fresh account the same day) — NEVER an automatic close on account age alone. Off

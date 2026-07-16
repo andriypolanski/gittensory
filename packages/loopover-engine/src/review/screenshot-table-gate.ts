@@ -326,9 +326,30 @@ export const DEFAULT_SCREENSHOT_CONTRACT_MESSAGE =
 export type ScreenshotTableGateResult = {
   violated: boolean;
   reason: string | null;
+  /** Set ONLY when PRESENCE mode (never matrix mode, never bot-capture -- see the staleness comment on
+   *  `evaluateScreenshotTableGate` below) independently satisfied the gate on THIS evaluation. The caller
+   *  should persist this (mirrors `markPullRequestVisualCaptureSatisfied`'s headSha-keyed write) so a LATER
+   *  evaluation on a NEW head SHA can tell whether the same static body evidence is being silently reused
+   *  across a push (stale -- #stale-screenshot-table-fix) or the contributor genuinely re-affirmed it. Absent
+   *  on every other NO_VIOLATION path (disabled/out-of-scope/bot-capture/matrix), and on a violation. */
+  presenceModeSatisfiedState?: ScreenshotTablePresenceEvidence | undefined;
 };
 
+/** One presence-mode "satisfied" checkpoint: the head SHA it was satisfied at, plus a fingerprint of the
+ *  exact evidence (before/after image URLs) that satisfied it -- see {@link evaluateScreenshotTableGate}'s
+ *  staleness check and {@link presenceModeEvidenceFingerprint}. */
+export type ScreenshotTablePresenceEvidence = { headSha: string; evidenceFingerprint: string };
+
 const NO_VIOLATION: ScreenshotTableGateResult = { violated: false, reason: null };
+
+/** A deterministic fingerprint of the presence-mode EVIDENCE in `body` -- the before/after image URL pairs a
+ *  contributor's table actually contributes as proof, not the surrounding prose/caption text (which can churn
+ *  harmlessly without the evidence itself changing). Reuses {@link extractTableRowImageUrls} (the same
+ *  >=2-images-per-row extraction the matrix-mode row check already treats as "a real before/after pair") so a
+ *  caption edit or table reflow that doesn't touch the actual image URLs still fingerprints identically. */
+function presenceModeEvidenceFingerprint(body: string | null | undefined): string {
+  return JSON.stringify(extractTableRowImageUrls(body));
+}
 
 /** PURE evaluator. Off (`enabled: false`) or out-of-scope (no configured label/path match) ⇒ no violation.
  *  `botCaptureSatisfied` ⇒ no violation regardless of mode (an automated capture is equivalent to a
@@ -337,9 +358,12 @@ const NO_VIOLATION: ScreenshotTableGateResult = { violated: false, reason: null 
  *  Two modes, chosen by whether `config.requireViewports` is non-empty (#4535):
  *  - MATRIX mode: every required (viewport, theme) pair (`requiredScreenshotMatrixPairs`) must have a labeled
  *    before/after row. Violated ⇒ the reason names exactly which pairs are still missing.
- *  - PRESENCE mode (the original #2006 behavior, unchanged): in scope AND (no image-bearing table in the body
- *    OR an image pasted outside a table OR a committed image file under a scoped path) ⇒ violated, with the
- *    configured (or default) templated message as the reason. */
+ *  - PRESENCE mode (the original #2006 behavior): in scope AND (no image-bearing table in the body OR an image
+ *    pasted outside a table OR a committed image file under a scoped path) ⇒ violated, with the configured (or
+ *    default) templated message as the reason. #stale-screenshot-table-fix: ALSO violated when the body's
+ *    evidence otherwise passes but is STALE -- the exact same before/after evidence already satisfied the gate
+ *    for a prior, different head SHA (see `headSha`/`presenceModeSatisfied` below and the inline comment at the
+ *    check itself) -- a screenshot table from push #1 must not silently keep passing through pushes #2..#N. */
 export function evaluateScreenshotTableGate(input: {
   config: ScreenshotTableGateConfig;
   prBody: string | null | undefined;
@@ -352,6 +376,16 @@ export function evaluateScreenshotTableGate(input: {
    *  help, which doesn't apply once the bot has already proven the change visually. Absent/false ⇒
    *  byte-identical to pre-#4110 behavior (body-table evidence only). */
   botCaptureSatisfied?: boolean | undefined;
+  /** The PR's current head SHA, for PRESENCE-mode staleness correlation only (matrix mode and bot-capture
+   *  already have their own head-SHA-correct evidence paths -- see the staleness comment below). Absent/empty
+   *  ⇒ byte-identical to pre-fix behavior (no correlation possible without it), matching this function's
+   *  existing "malformed/missing input degrades gracefully" convention. */
+  headSha?: string | null | undefined;
+  /** The (headSha, evidenceFingerprint) checkpoint PRESENCE mode was last confirmed satisfied at for this PR,
+   *  persisted by the caller from a PRIOR call's `presenceModeSatisfiedState` (mirrors how `botCaptureSatisfied`
+   *  above is itself derived by the caller from a persisted `visualCaptureSatisfiedSha === headSha` check).
+   *  `null`/undefined ⇒ never satisfied before (or the caller has no persistence wired up yet). */
+  presenceModeSatisfied?: ScreenshotTablePresenceEvidence | null | undefined;
 }): ScreenshotTableGateResult {
   const { config } = input;
   if (!config.enabled) return NO_VIOLATION;
@@ -368,6 +402,34 @@ export function evaluateScreenshotTableGate(input: {
   const hasTable = hasImageBearingMarkdownTable(input.prBody);
   const outsideTable = hasImageOutsideTable(input.prBody);
   const committedImage = hasCommittedImageFile(input.changedFiles, config.whenPaths);
-  if (hasTable && !outsideTable && !committedImage) return NO_VIOLATION;
+  if (hasTable && !outsideTable && !committedImage) {
+    // #stale-screenshot-table-fix: unlike botCaptureSatisfied above (keyed to headSha by construction), this
+    // presence check is pure regex/string matching over `prBody` with NO tie to the PR's live head SHA at all
+    // -- a table pasted on push #1 keeps matching byte-for-byte on pushes #2..#N even after they ship a real
+    // visual regression the table never pictured. FAIL CLOSED (this codebase's existing philosophy for
+    // ambiguous review states, e.g. linked-issue hard rules): if we know the current head SHA and this EXACT
+    // evidence (the extracted before/after image URLs, not surrounding prose) already satisfied the gate for a
+    // DIFFERENT, older head, treat it as still-violated -- the contributor must either genuinely re-affirm
+    // (edit the body so the extracted evidence differs, even by re-uploading to the same table position -- a
+    // fresh GitHub upload gets a fresh URL) or let the bot's own capture pipeline take over for the new head.
+    // A headSha we've never seen satisfied before (first table ever, or the caller has no persistence wired up)
+    // is NOT stale -- there is nothing to be stale relative to.
+    const headSha = input.headSha;
+    const priorSatisfied = input.presenceModeSatisfied;
+    const evidenceFingerprint = presenceModeEvidenceFingerprint(input.prBody);
+    const staleForNewHead =
+      typeof headSha === "string" &&
+      headSha.length > 0 &&
+      priorSatisfied != null &&
+      priorSatisfied.headSha !== headSha &&
+      priorSatisfied.evidenceFingerprint === evidenceFingerprint;
+    if (!staleForNewHead) {
+      return {
+        violated: false,
+        reason: null,
+        ...(typeof headSha === "string" && headSha.length > 0 ? { presenceModeSatisfiedState: { headSha, evidenceFingerprint } } : {}),
+      };
+    }
+  }
   return { violated: true, reason: config.message ?? appendSkillLink(DEFAULT_SCREENSHOT_CONTRACT_MESSAGE, config.skillFileUrl) };
 }

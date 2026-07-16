@@ -605,6 +605,11 @@ export type PullRequestRecord = {
    *  screenshotTableGate treats visualCaptureSatisfiedSha === headSha as evidence equivalent to a hand-authored
    *  before/after table. Publish-written; read straight from the row. */
   visualCaptureSatisfiedSha?: string | null | undefined;
+  /** Screenshot-table PRESENCE-mode staleness correlation (#stale-screenshot-table-fix): the (headSha,
+   *  evidenceFingerprint) checkpoint the screenshotTableGate's presence-mode check last satisfied for this PR
+   *  (see evaluateScreenshotTableGate's staleness comment). `null`/absent = presence mode has never satisfied
+   *  the gate for this PR yet. Planner-written; read straight from the row. */
+  screenshotTablePresenceSatisfied?: { headSha: string; evidenceFingerprint: string } | null | undefined;
   /** File paths changed by this open PR, when the caller has already resolved them (e.g. from the
    *  `pull_request_files` cache). Absent/undefined when not resolved — callers must not assume an empty array
    *  means "no files changed". Mirrors {@link RecentMergedPullRequestRecord.changedFiles} so the same
