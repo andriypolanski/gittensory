@@ -918,18 +918,35 @@ export function tokenize(value: string): string[] {
 }
 
 function extractLinkedIssueNumbers(text: string, repoFullName: string): number[] {
-  const numbers = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)].map((match) => Number(match[1]));
+  // GitHub's native closing-keyword linker does not treat backtick-wrapped text as a real "Closes #N" directive,
+  // and this repo's own PR template contains "(e.g. `Closes #123`)". Reject regex hits that fall inside an inline
+  // code span, matching the canonical src/db/repositories.ts extractor; keep the original text (rather than
+  // blanking spans) so text on either side of a span can't combine into a fake closing reference.
+  const inlineCodeSpanRanges = [...text.matchAll(/`[^`\n]*`/g)].map((match) => ({
+    start: match.index!,
+    end: match.index! + match[0].length,
+  }));
+  const insideCodeSpan = (match: RegExpMatchArray): boolean => {
+    const matchStart = match.index!;
+    const matchEnd = matchStart + match[0].length;
+    return inlineCodeSpanRanges.some((range) => matchStart < range.end && matchEnd > range.start);
+  };
+  const numbers = [...text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+#(\d+)\b/gi)]
+    .filter((match) => !insideCodeSpan(match))
+    .map((match) => Number(match[1]));
   // GitHub also auto-closes via the fully-qualified `KEYWORD owner/repo#N` form (e.g. Renovate/Dependabot bodies).
   // Count it only when owner/repo case-insensitively equals THIS repo — a reference to a different repo closes an
   // issue elsewhere, not here, so it must not spoof a same-repo link. Same `\b`-anchored keywords as above (#1988).
   const target = repoFullName.toLowerCase();
   for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+([\w.-]+\/[\w.-]+)#(\d+)\b/gi)) {
+    if (insideCodeSpan(match)) continue;
     if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
   }
   // GitHub's own linker ALSO recognizes the full issue URL form (`KEYWORD https://github.com/owner/repo/issues/N`)
   // -- a common habit (e.g. pasted from a browser address bar) that the two `#`-anchored forms above never match.
   // Same same-repo-only rule as the qualified form (#linked-issue-url-form).
   for (const match of text.matchAll(/\b(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s+https?:\/\/(?:www\.)?github\.com\/([\w.-]+\/[\w.-]+)\/issues\/(\d+)\b/gi)) {
+    if (insideCodeSpan(match)) continue;
     if (match[1]!.toLowerCase() === target) numbers.push(Number(match[2]));
   }
   return [...new Set(numbers.filter((value) => Number.isInteger(value) && value > 0))];

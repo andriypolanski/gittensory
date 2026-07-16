@@ -1279,6 +1279,13 @@ describe("predicted-gate engine module coverage (#2283)", () => {
     expect(predictedGateEngineInternals.truncateText("short", 10)).toBe("short");
     expect(predictedGateEngineInternals.truncateText("x".repeat(20), 10)).toHaveLength(10);
     expect(predictedGateEngineInternals.extractLinkedIssueNumbers(`closes ${REPO.fullName}#42`, REPO.fullName)).toContain(42);
+    // #6630: a backtick-wrapped reference (e.g. the unfilled PR-template boilerplate `Closes #123`) is NOT a real
+    // linked-issue directive, matching the canonical src/db/repositories.ts extractor; the same reference outside a
+    // code span still counts.
+    expect(predictedGateEngineInternals.extractLinkedIssueNumbers("See the template: `Closes #123` for the format.", REPO.fullName)).toEqual([]);
+    expect(predictedGateEngineInternals.extractLinkedIssueNumbers("Closes #123", REPO.fullName)).toEqual([123]);
+    expect(predictedGateEngineInternals.extractLinkedIssueNumbers(`ref \`closes ${REPO.fullName}#77\``, REPO.fullName)).toEqual([]);
+    expect(predictedGateEngineInternals.extractLinkedIssueNumbers(`ref \`closes https://github.com/${REPO.fullName}/issues/88\``, REPO.fullName)).toEqual([]);
 
     const failureWithQuality = evaluateGateCheck(
       { ...advisoryBase, findings: [{ code: "missing_linked_issue", severity: "warning", title: "issue", detail: "issue", action: "link it" }] },
