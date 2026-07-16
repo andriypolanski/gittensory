@@ -22,6 +22,7 @@
 // additive module. The host injects concrete adapters at the call site.
 
 import { errorStack } from "../utils/json";
+import { neutralizePromptInjection } from "./prompt-injection";
 
 // ── Injected infra interfaces (inlined from reviewbot src/platform/types.ts) ──────────────────────
 // These mirror the platform-adapter shapes so the host can pass its Vectorize/self-host-AI/D1-backed
@@ -684,7 +685,15 @@ export function formatRetrievedContext(chunks: Array<{ path: string; text: strin
   ];
   let used = 0;
   for (const c of chunks) {
-    const block = `--- ${c.path} ---\n${c.text}\n`;
+    // Chunks are retrieved from repository content that (unlike the diff/title/body defanged by
+    // safety.ts) is never routed through defangReviewInput -- a prior, innocuous-looking merged PR
+    // could have planted an injection phrase in a doc/comment that a later review's RAG retrieval
+    // splices in verbatim. Defang both fields here, mirroring review-grounding.ts's
+    // formatFilesSection (path via safeGroundingPath, content via neutralizePromptInjection) so this
+    // reference-context channel gets the same mechanical redaction as its siblings.
+    const path = neutralizePromptInjection(c.path).text;
+    const text = neutralizePromptInjection(c.text).text;
+    const block = `--- ${path} ---\n${text}\n`;
     if (used + block.length > MAX_CONTEXT_CHARS) {
       lines.push("… (additional related context omitted to stay within budget)");
       break;
