@@ -1,9 +1,69 @@
 import { render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
-// chat-action-registry → governor-chokepoint → @loopover/engine (dist not built in this workspace).
-vi.mock("@loopover/engine", async () => {
-  return import("../../../packages/loopover-engine/src/index");
+// chat-action-registry → governor-chokepoint → governor-ledger → node:sqlite. jsdom/Vite cannot bundle
+// that builtin (#6521); keep a client-safe registry twin so the real dispatch + registration modules load.
+vi.mock("../../../packages/loopover-miner/lib/chat-action-registry.js", () => {
+  const GOVERNOR_GATED = Symbol("loopover.chat-action.governor-gated");
+
+  function isGovernorGatedHandler(handler: unknown): boolean {
+    return typeof handler === "function" && (handler as unknown as { [k: symbol]: unknown })[GOVERNOR_GATED] === true;
+  }
+
+  function governorGatedHandler(
+    run: (request: unknown, gate: unknown) => unknown,
+    options: { evaluateGate?: (input?: unknown) => { decision: { stage: string } } } = {},
+  ) {
+    const evaluateGate = options.evaluateGate ?? (() => ({ decision: { stage: "allow" } }));
+    const handler = async (request: { governorInput?: unknown }) => {
+      const gate = evaluateGate(request?.governorInput);
+      if (gate?.decision?.stage !== "allow") {
+        return { ok: false, status: "gated", decision: gate?.decision ?? null };
+      }
+      const result = await run(request, gate);
+      return { ok: true, status: "executed", decision: gate.decision, result };
+    };
+    Object.defineProperty(handler, GOVERNOR_GATED, { value: true });
+    return handler;
+  }
+
+  function createChatActionRegistry() {
+    const actions = new Map<
+      string,
+      { paramsValidator: (params: unknown) => boolean; handler: (request: unknown) => Promise<unknown> }
+    >();
+    return {
+      register(
+        name: string,
+        definition: {
+          paramsValidator: (params: unknown) => boolean;
+          handler: (request: unknown) => Promise<unknown>;
+        },
+      ) {
+        if (!isGovernorGatedHandler(definition.handler)) {
+          throw new Error(`registerChatAction("${name}"): handler must be produced by governorGatedHandler()`);
+        }
+        actions.set(name, definition);
+        return definition;
+      },
+      get: (name: string) => actions.get(name),
+      has: (name: string) => actions.has(name),
+      names: () => [...actions.keys()],
+      get size() {
+        return actions.size;
+      },
+    };
+  }
+
+  return {
+    createChatActionRegistry,
+    governorGatedHandler,
+    isGovernorGatedHandler,
+    chatActionRegistry: createChatActionRegistry(),
+    registerChatAction: () => {
+      throw new Error("tests use an injected isolated registry");
+    },
+  };
 });
 
 import { createChatActionRegistry } from "../../../packages/loopover-miner/lib/chat-action-registry.js";
