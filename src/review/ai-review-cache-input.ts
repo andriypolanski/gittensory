@@ -7,10 +7,13 @@ import { sha256Hex } from "../utils/crypto";
 
 // Bumped v1→v2 (#2995): `features` gained a `cultureProfile` member. Bumped v2→v3 (#2182-#2186): `features`
 // gained an `impactMap` member. Bumped v3→v4 (#3902): `selfHostAiModelOverride` gained ollamaModel/openaiModel/
-// openaiCompatibleModel/anthropicModel members. Every prior cached review's fingerprint was computed without
-// that key, so bumping the version guarantees a clean cache miss on the first review after upgrade rather than
-// silently reusing a hash computed under a different payload shape.
-export const AI_REVIEW_CACHE_INPUT_VERSION = "ai-review-input:v4";
+// openaiCompatibleModel/anthropicModel members. Bumped v4→v5: added a top-level `body` member (the PR
+// description is threaded into the reviewer prompt exactly like `title`, but was never fingerprinted -- an
+// edited-description webhook with an unchanged head SHA silently replayed the pre-edit review). Every prior
+// cached review's fingerprint was computed without that key, so bumping the version guarantees a clean cache
+// miss on the first review after upgrade rather than silently reusing a hash computed under a different payload
+// shape.
+export const AI_REVIEW_CACHE_INPUT_VERSION = "ai-review-input:v5";
 
 // #regate-churn (root cause, confirmed in production): this fingerprint USED to also hash the PR's live
 // `baseSha`, on the theory that a rebase/retarget can change the diff GitHub reports for an otherwise-unchanged
@@ -27,6 +30,10 @@ export type AiReviewCacheInput = {
   // `edited` event that changes only the title must miss the cache rather than replay a review generated for
   // different prompt metadata.
   title: string;
+  // Same reasoning as `title` immediately above: the PR body is threaded into the reviewer prompt too (see
+  // buildUserPrompt's `input.body`), so a same-head `edited` event that changes only the description must also
+  // miss the cache rather than replay a review generated against a different Description: block.
+  body: string | null | undefined;
   mode: string;
   byok: boolean;
   provider: string | null | undefined;
@@ -123,6 +130,7 @@ export async function aiReviewCacheInputFingerprint(input: AiReviewCacheInput): 
   const payload = {
     version: AI_REVIEW_CACHE_INPUT_VERSION,
     title: input.title,
+    body: input.body ?? null,
     mode: input.mode,
     byok: input.byok,
     provider: input.provider ?? null,

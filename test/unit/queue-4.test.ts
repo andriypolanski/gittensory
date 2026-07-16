@@ -1155,10 +1155,15 @@ describe("queue processors", () => {
     const usage = await env.DB.prepare("select feature, status from ai_usage_events where feature = ?").bind("ai_review_pr").first<{ feature: string; status: string }>();
     expect(usage).toMatchObject({ feature: "ai_review_pr", status: "ok" });
     expect(cacheReadSpy).toHaveBeenCalled();
-    expect(cacheReadSpy.mock.calls[0]?.[5]).toMatch(/^ai-review-input:v4:/);
+    // Pinned to v4 before the fix that added `body` to AiReviewCacheInput (AI_REVIEW_CACHE_INPUT_VERSION
+    // bumped v4->v5, same convention as every prior member addition -- see ai-review-cache-input.ts's version
+    // comment) -- this assertion only cares that a real, current-shape fingerprint was computed and threaded
+    // through, not the exact version number, so it is updated to the new version rather than left pinned to
+    // the pre-fix one.
+    expect(cacheReadSpy.mock.calls[0]?.[5]).toMatch(/^ai-review-input:v5:/);
     expect(cacheWriteSpy).toHaveBeenCalled();
     expect(cacheWriteSpy.mock.calls[0]?.[5]).toMatchObject({
-      metadata: { inputFingerprint: expect.stringMatching(/^ai-review-input:v4:/) },
+      metadata: { inputFingerprint: expect.stringMatching(/^ai-review-input:v5:/) },
     });
     cacheReadSpy.mockRestore();
     cacheWriteSpy.mockRestore();

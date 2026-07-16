@@ -243,6 +243,7 @@ describe("queue processors", () => {
   async function cachedSubFloorDefectFingerprint(title: string): Promise<string> {
     return aiReviewCacheInputFingerprint({
       title,
+      body: "Closes #1",
       mode: "block",
       byok: false,
       provider: null,

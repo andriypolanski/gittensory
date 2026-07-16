@@ -9182,6 +9182,7 @@ async function maybePublishPrPublicSurface(
             dynamicReviewFeatures.impactMap;
           const inputFingerprint = await aiReviewCacheInputFingerprint({
             title: pr.title,
+            body: pr.body,
             mode: settings.aiReviewMode,
             byok: settings.aiReviewByok,
             provider: settings.aiReviewProvider,

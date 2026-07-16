@@ -6,6 +6,7 @@ import {
 
 const baseInput = (): AiReviewCacheInput => ({
   title: "Fix the retry loop",
+  body: "Fixes the retry loop by adding a backoff.",
   mode: "block",
   byok: false,
   provider: null,
@@ -273,6 +274,26 @@ describe("aiReviewCacheInputFingerprint", () => {
 
     expect(titleChanged).not.toBe(original);
     expect(repeated).toBe(original);
+  });
+
+  it("changes when the PR body changes even though nothing else does (#ai-review-cache-body)", async () => {
+    // The PR description is threaded into the reviewer prompt (buildUserPrompt's `input.body`) exactly like
+    // `title` above, so a same-head `edited` event that changes only the description must miss the cache
+    // rather than replay a review generated against a different Description: block. This regression-tests the
+    // fix: `body` used to be entirely absent from AiReviewCacheInput/the hashed payload, so an edited-body
+    // webhook with an unchanged headSha silently reused the pre-edit AI verdict.
+    const original = await aiReviewCacheInputFingerprint(baseInput());
+    const bodyChanged = await aiReviewCacheInputFingerprint({ ...baseInput(), body: "Completely different description now." });
+    const bodyNull = await aiReviewCacheInputFingerprint({ ...baseInput(), body: null });
+    const bodyUndefined = await aiReviewCacheInputFingerprint({ ...baseInput(), body: undefined });
+    const repeated = await aiReviewCacheInputFingerprint(baseInput());
+
+    expect(bodyChanged).not.toBe(original);
+    expect(repeated).toBe(original);
+    // null and undefined both mean "no body" and must fingerprint identically -- the same normalization every
+    // other nullable field in this payload (provider, model, gatePack, ...) already applies via `?? null`.
+    expect(bodyNull).toBe(bodyUndefined);
+    expect(bodyNull).not.toBe(original);
   });
 
   it("changes when aiReviewAllAuthors, aiReviewCloseConfidence, or gatePack change", async () => {
