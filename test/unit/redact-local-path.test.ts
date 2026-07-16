@@ -30,6 +30,24 @@ describe("redactLocalPath (heuristic: detect an unknown path in free text)", () 
     expect(redacted).not.toContain("~/private");
   });
 
+  // #6258: a Node.js stack-frame path (`at fn (/abs/path:line:col)`) previously leaked in full because
+  // `(` was missing from the prefix delimiter class -- only a space-prefixed path redacted correctly.
+  it("redacts a parenthesis-prefixed path (the Node.js stack-frame shape)", () => {
+    // The trailing `:10:5` line/column suffix has no path separator before the closing `)`, so it's
+    // swallowed into the same redacted match -- still a full, leak-free redaction either way.
+    expect(redactLocalPath("at Object.<anonymous> (/Users/alice/secretproject/file.js:10:5)")).toBe(
+      "at Object.<anonymous> (<local-path>)",
+    );
+  });
+
+  it("redacts a bracket-prefixed path, preserving the closing bracket", () => {
+    expect(redactLocalPath("[/Users/alice/secretproject/file.js]")).toBe("[<local-path>]");
+  });
+
+  it("redacts a colon-prefixed path with no space (e.g. `label:/abs/path`)", () => {
+    expect(redactLocalPath("error:/Users/alice/secretproject/file.js")).toBe("error:<local-path>");
+  });
+
   it("leaves text with no local path untouched, including a bare slash", () => {
     expect(redactLocalPath("just some text, version 1.2.3")).toBe("just some text, version 1.2.3");
     expect(redactLocalPath("pass --flag / or | here")).toBe("pass --flag / or | here");

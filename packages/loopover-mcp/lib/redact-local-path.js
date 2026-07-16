@@ -23,9 +23,12 @@ export function redactLocalPath(value) {
   // Both `/g` patterns are rebuilt per call so no `lastIndex` state carries between invocations.
   // Delimiter-anchored roots (`~/`, `~\`, `C:\`, `C:/`, `/`) whose interior segments may contain
   // spaces, e.g. `/Users/Alice Smith/project` — the anchoring prefix is preserved, only the path swaps.
-  const pathSegment = "[^\\\\/\\s\"'`,;)]+(?:\\s+[^\\\\/\\s\"'`,;)]+)*(?=[\\\\/])";
-  const pathTail = "[^\\\\/\\s\"'`,;)]+";
-  const rootedPath = new RegExp(`(^|[\\s"'\\\`=])((?:~[\\\\/]|[A-Za-z]:[\\\\/]|/)(?:${pathSegment}[\\\\/])*${pathTail})`, "g");
+  const pathSegment = "[^\\\\/\\s\"'`,;)\\]]+(?:\\s+[^\\\\/\\s\"'`,;)\\]]+)*(?=[\\\\/])";
+  const pathTail = "[^\\\\/\\s\"'`,;)\\]]+";
+  // Prefix delimiters a real path can immediately follow in pasted stack-trace/validation-output text.
+  // `(` is the Node.js stack-frame shape (`at fn (/abs/path:10:5)`); `[` and `:` cover the same "no space
+  // before the path" shape in bracketed log lines and colon-joined messages (e.g. `path:/abs/path`).
+  const rootedPath = new RegExp(`(^|[\\s"'\\\`=(\\[:])((?:~[\\\\/]|[A-Za-z]:[\\\\/]|/)(?:${pathSegment}[\\\\/])*${pathTail})`, "g");
   return text
     .replace(rootedPath, (_, prefix) => `${prefix}<local-path>`)
     // Home/Windows roots that appear mid-token with no leading delimiter (so the anchored pass skips
