@@ -2171,6 +2171,17 @@ describe("fetchShotContentBlock (#4111)", () => {
     vi.stubGlobal("fetch", vi.fn(async () => { throw new Error("network down"); }));
     await expect(fetchShotContentBlock("https://x/loopover/shot?key=broken")).resolves.toBeUndefined();
   });
+
+  it("bounds the fetch with an AbortSignal timeout (#7070)", async () => {
+    const fetchMock = vi.fn(
+      async (_url: string, _init?: RequestInit) => new Response(new Uint8Array([137, 80, 78, 71]), { status: 200 }),
+    );
+    vi.stubGlobal("fetch", fetchMock);
+    await fetchShotContentBlock("https://x/loopover/shot?key=timed");
+    // Mirrors resolveShotUrl's own bounded fetch in this file -- an unresponsive shot host can't hang the call.
+    const init = fetchMock.mock.calls[0]?.[1];
+    expect(init?.signal).toBeInstanceOf(AbortSignal);
+  });
 });
 
 

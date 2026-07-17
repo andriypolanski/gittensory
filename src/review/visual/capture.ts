@@ -127,7 +127,9 @@ export function hasSuccessfulBotCapture(routes: readonly CaptureRoute[]): boolea
  */
 export async function fetchShotContentBlock(url: string): Promise<AiContentBlock | undefined> {
   try {
-    const response = await fetch(url);
+    // Bound the fetch like every other external screenshot call in this file (#7070) -- resolveShotUrl below
+    // already uses this same timeout; a TimeoutError rejection is caught by the surrounding catch.
+    const response = await fetch(url, { signal: AbortSignal.timeout(EXTERNAL_SCREENSHOT_FETCH_TIMEOUT_MS) });
     if (!response.ok) return undefined;
     const bytes = new Uint8Array(await response.arrayBuffer());
     return { type: "image", data: base64Encode(await downscaleForVision(bytes)), mimeType: "image/png" };
