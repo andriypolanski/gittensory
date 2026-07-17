@@ -40,8 +40,12 @@ export type ProgressSnapshot = {
 /** Build a customer-facing progress snapshot from already-computed loop state (#4800). Pure. */
 export function buildProgressSnapshot(state: LoopProgressState): ProgressSnapshot {
   const maxIterations = state.maxIterations ?? null;
+  // Clamp BOTH ends (#6773): `iteration` is an unvalidated caller-supplied number, so a negative one (an
+  // upstream bookkeeping bug) would otherwise produce a negative percent, contradicting the documented 0-100.
   const percentComplete =
-    maxIterations !== null && maxIterations > 0 ? Math.min(100, Math.round((state.iteration / maxIterations) * 100)) : null;
+    maxIterations !== null && maxIterations > 0
+      ? Math.max(0, Math.min(100, Math.round((state.iteration / maxIterations) * 100)))
+      : null;
   return {
     phase: state.phase,
     status: state.status,

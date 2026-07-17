@@ -28,6 +28,13 @@ describe("buildProgressSnapshot (#4800)", () => {
     expect(buildProgressSnapshot(running({ iteration: 7, maxIterations: 5 })).percentComplete).toBe(100);
   });
 
+  it("REGRESSION (#6773): floors percent-complete at 0 for a negative iteration, never below the documented range", () => {
+    // `iteration` is an unvalidated caller-supplied number: an upstream bookkeeping bug producing a negative
+    // one must not surface as a negative percent (the upper bound was clamped, the lower one was not).
+    expect(buildProgressSnapshot(running({ iteration: -1, maxIterations: 5 })).percentComplete).toBe(0);
+    expect(buildProgressSnapshot(running({ iteration: -100, maxIterations: 5 })).percentComplete).toBe(0);
+  });
+
   it("defaults recent activity to empty and caps the tail at MAX_PROGRESS_ACTIVITY", () => {
     expect(buildProgressSnapshot(running()).recentActivity).toEqual([]); // omitted
     const many = Array.from({ length: MAX_PROGRESS_ACTIVITY + 4 }, (_, i) => ({ step: `s${i}` }));
