@@ -9,8 +9,8 @@ ARG LOOPOVER_VERSION=
 FROM public.ecr.aws/docker/library/node:24-slim AS build
 WORKDIR /app
 # Full source BEFORE `npm ci`: npm workspaces only symlinks packages that already exist on disk.
-# Same ordering fix as the root gittensory-api Dockerfile — @loopover/engine must be
-# present when `npm ci` runs or gittensory-miner's workspace dependency cannot resolve.
+# Same ordering fix as the root loopover-api Dockerfile — @loopover/engine must be
+# present when `npm ci` runs or loopover-miner's workspace dependency cannot resolve.
 COPY . .
 RUN npm ci --ignore-scripts
 RUN npm --workspace @loopover/engine run build

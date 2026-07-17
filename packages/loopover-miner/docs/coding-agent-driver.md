@@ -6,7 +6,7 @@ provider-agnostic contract, so the rest of the miner — planning, attempt loggi
 has to know which backend actually did the work.
 
 The interface itself lives in `@loopover/engine`
-([`packages/loopover-engine/src/miner/coding-agent-driver.ts`](../../gittensory-engine/src/miner/coding-agent-driver.ts));
+([`packages/loopover-engine/src/miner/coding-agent-driver.ts`](../../loopover-engine/src/miner/coding-agent-driver.ts));
 the orchestration around it (mode gating, invocation, the factory) lives in the sibling modules described below.
 
 > **See also:** [Observing your miner](observability.md) — point Grafana at the miner's local SQLite ledgers

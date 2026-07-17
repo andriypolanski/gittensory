@@ -100,8 +100,8 @@ redo them:
 
 ## Resolution (#4784)
 
-All five checklist items are resolved (or, where noted, explicitly deferred with a reason); gittensory's
-own github.com conventions survive only as defaults, and the existing gittensory discovery path is
+All five checklist items are resolved (or, where noted, explicitly deferred with a reason); loopover's
+own github.com conventions survive only as defaults, and the existing loopover discovery path is
 unchanged (`resolveForgeConfig()` with no overrides is byte-identical to the pre-#4784 hardcoded
 behavior).
 
@@ -120,7 +120,7 @@ behavior).
   reads a non-`GITHUB_TOKEN` variable, defaulting to `GITHUB_TOKEN`.
 - **Tenant goal spec through — resolved.** `runDiscover` forwards `goalSpecsByRepo` /
   `goalSpecContentByRepo` to the ranker and surfaces `usedDefaultGoalSpec` in both the JSON and the
-  human-readable summary, so the fall-back to gittensory's built-in rubric is explicit rather than
+  human-readable summary, so the fall-back to loopover's built-in rubric is explicit rather than
   silent. The **discovery** label taxonomy is the goal spec's generic `preferredLabels` /
   `blockedLabels` (already per-tenant). The engine's `DEFAULT_TYPE_LABELS` (`gittensor:*`) is a
   **review-stack** default (overridable per repo via the focus manifest) that the miner discovery

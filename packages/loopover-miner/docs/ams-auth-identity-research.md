@@ -2,7 +2,7 @@
 
 Research spike for **#5217**. AMS has no auth/identity layer today — self-host is single-operator, single-machine,
 with no login concept at all. A hosted AMS needs one. This document surveys realistic approaches, evaluated
-**against the installation-token / GitHub App patterns gittensory already operates** (ORB's token-broker,
+**against the installation-token / GitHub App patterns loopover already operates** (ORB's token-broker,
 `src/orb/broker.ts`), so the eventual auth/identity design issue starts from a baseline consistent with existing
 infrastructure rather than an unrelated auth stack. **Research and writeup only — no auth flow, token exchange,
 or provider integration is implemented or decided here; the output is a non-binding input to the maintainer-owned

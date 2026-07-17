@@ -91,7 +91,7 @@ family's metrics are simply omitted from the file for that run (logged to stderr
 
 ```sh
 # crontab -e
-*/5 * * * * LOOPOVER_MINER_CONFIG_DIR=/data/miner sh /path/to/gittensory/scripts/export-miner-prometheus-textfile.sh
+*/5 * * * * LOOPOVER_MINER_CONFIG_DIR=/data/miner sh /path/to/loopover/scripts/export-miner-prometheus-textfile.sh
 ```
 
 Then point your own `prometheus.yml` at node_exporter as usual — no changes to this repo's `prometheus/` config
@@ -102,7 +102,7 @@ alert rules that already target these exact metric names.
 ## Anonymized central telemetry (opt-in, off by default)
 
 Everything above stays entirely on your own machine. Separately, the miner can send a small, anonymized batch
-of its own PR-outcome history to gittensory's hosted AMS collector — the same fleet-growth/usage telemetry Orb's
+of its own PR-outcome history to loopover's hosted AMS collector — the same fleet-growth/usage telemetry Orb's
 self-host collector already sends for maintainers, mirrored for contributors:
 
 ```sh
@@ -124,6 +124,6 @@ maintainer-side collector) — every invocation requires `--enable --send` expli
 
 | Variable | Purpose |
 | --- | --- |
-| `LOOPOVER_MINER_AMS_COLLECTOR_URL` | Override the collector endpoint (default: gittensory's hosted collector). |
+| `LOOPOVER_MINER_AMS_COLLECTOR_URL` | Override the collector endpoint (default: loopover's hosted collector). |
 | `LOOPOVER_MINER_AMS_COLLECTOR_TOKEN` | Optional bearer credential, only needed if your collector requires one. |
 | `LOOPOVER_MINER_ORB_EXPORT_DB` | Override the local secret+cursor store path (default: `orb-export.sqlite3` under `LOOPOVER_MINER_CONFIG_DIR`). |

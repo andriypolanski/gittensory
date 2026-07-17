@@ -126,7 +126,7 @@ fails the container fast with a clear error naming the file path, rather than si
 credential. The same `<NAME>_FILE` convention works for any credential the miner reads from a plain env var —
 not only `GITHUB_TOKEN`.
 
-The repo-root [`docker-compose.yml`](../../docker-compose.yml) documents the **self-hosted review stack** (the `gittensory` API/orb), not the miner CLI. Miners are clients of that stack (or of github.com directly) and do not require it to run locally.
+The repo-root [`docker-compose.yml`](../../docker-compose.yml) documents the **self-hosted review stack** (the `loopover` API/orb), not the miner CLI. Miners are clients of that stack (or of github.com directly) and do not require it to run locally.
 
 ### Docker Compose (fleet mode)
 

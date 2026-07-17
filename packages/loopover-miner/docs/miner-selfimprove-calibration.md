@@ -14,7 +14,7 @@ that could do it would defeat the safety it exists to provide.
 ## What calibration measures
 
 The engine contract is `Phase7CalibrationLoopResult`
-([`packages/loopover-engine/src/phase7-calibration-loop.ts`](../../gittensory-engine/src/phase7-calibration-loop.ts)):
+([`packages/loopover-engine/src/phase7-calibration-loop.ts`](../../loopover-engine/src/phase7-calibration-loop.ts)):
 it combines the **historical-replay** composite score with the passive **`pr_outcome`** signal and tracks accuracy
 against the documented **`DOCUMENTED_CALIBRATION_BASELINE = 0.62`** (the 62% self-review baseline from the Phase 7
 roadmap). The engine owns the deterministic combine / freshness / threshold / hold-reason logic; the miner runtime
@@ -120,7 +120,7 @@ From any contributor-safe tool in this batch:
 
 ## References
 
-- [`packages/loopover-engine/src/phase7-calibration-loop.ts`](../../gittensory-engine/src/phase7-calibration-loop.ts) — the calibration-loop contract + `DOCUMENTED_CALIBRATION_BASELINE`.
+- [`packages/loopover-engine/src/phase7-calibration-loop.ts`](../../loopover-engine/src/phase7-calibration-loop.ts) — the calibration-loop contract + `DOCUMENTED_CALIBRATION_BASELINE`.
 - `src/review/parity.ts` — `GateEvalRow` (the confusion matrix) and `REVERSAL_DISCOUNT_WEIGHT` (value-weighting).
 - `src/review/auto-tune.ts` — the existing hold-only accuracy circuit-breaker (#2352's eventual consumer).
 - `src/selfhost/orb-collector.ts` — the anonymized HMAC-with-local-secret telemetry pattern.

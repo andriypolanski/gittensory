@@ -39,7 +39,7 @@ It never clones source and never writes to GitHub.
 
 Discovery is per-tenant, not github.com-specific (#4784): `lib/forge-config.js` (`resolveForgeConfig`) holds the
 forge base URL, API version, request headers, repo path, search endpoint/qualifiers, user-agent, and credential env
-var behind one resolver with gittensory's github.com values as the only defaults, so the fan-out targets another
+var behind one resolver with loopover's github.com values as the only defaults, so the fan-out targets another
 forge unchanged. `loopover-miner discover` surfaces `--api-base-url <url>` and `--token-env <VAR>` and forwards a
 tenant goal spec to the ranker, printing `usedDefaultGoalSpec` so a fall-back to the built-in rubric is explicit
 rather than silent. See [`docs/repo-agnostic-capability-audit.md`](docs/repo-agnostic-capability-audit.md) for the
@@ -53,7 +53,7 @@ throws, and per its acceptance criteria **fails closed** — a repo with no reco
 `{ detected: false, reason }` and a command that can't be inferred without guessing stays `null`, rather than being
 assumed. The attempt path consumes it: `buildCodingTaskSpec` appends the real stack summary (and any
 confidently-inferred build/test/lint/format commands) to the coding-agent instructions so validation uses
-the target repo's own tooling rather than assuming LoopOver/gittensory CI ([#4786](https://github.com/JSONbored/gittensory/issues/4786)). (#4785)
+the target repo's own tooling rather than assuming LoopOver's own CI conventions ([#4786](https://github.com/JSONbored/gittensory/issues/4786)). (#4785)
 
 The package also includes an append-only governor decision ledger: `initGovernorLedger` / `appendGovernorEvent`
 persist structured allow/deny/throttle/kill-switch outcomes in local SQLite for contributor audit. Insert-only —
@@ -79,7 +79,7 @@ deleted. (#2322)
 
 The package also records local PR outcomes: `recordPrOutcomeSnapshot` / `readPrOutcomes` write and reduce the
 miner's OWN record of the outcomes of its OWN PRs (merged / closed, with an optional rejection-reason bucket) over
-the append-only event ledger above. This is DISTINCT from the gittensory server's `recordPrOutcome`
+the append-only event ledger above. This is DISTINCT from the loopover server's `recordPrOutcome`
 (`src/review/outcomes-wire.ts`), which writes hosted-backend audit rows from the GitHub App's webhook stream — same
 concept name, different codebase layer, no shared code (a laptop-mode miner may have no webhook relay at all). (#4274)
 

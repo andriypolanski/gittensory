@@ -1,7 +1,7 @@
 # Cross-repo evaluation harness
 
 The **cross-repo evaluation harness** (#4788) is a repeatable readiness check that asks whether the miner can
-approach a diverse benchmark repo set **without gittensory-specific target-repo configuration** (no
+approach a diverse benchmark repo set **without loopover-specific target-repo configuration** (no
 `.loopover-miner.yml` required in the benchmark repos). It exercises the same offline path a real attempt uses
 before the coding agent runs:
 
@@ -9,7 +9,7 @@ before the coding agent runs:
 2. **Stack auto-detection** (`detectRepoStack`, #4785)
 3. **Coding-task spec composition** (`buildCodingTaskSpec`, #4786) including validation guidance derived from the
    detected stack
-4. **Assumption scan** — agent instructions must not positively mandate LoopOver/gittensory CI conventions
+4. **Assumption scan** — agent instructions must not positively mandate LoopOver's own CI conventions
 
 Each benchmark repo receives a **pass/fail** line. Failures are categorized:
 
@@ -17,7 +17,7 @@ Each benchmark repo receives a **pass/fail** line. Failures are categorized:
 | --- | --- |
 | `stack_detection_gap` | No recognized manifest / stack could not be inferred |
 | `execution_gap` | Stack detected but the coding-task path is not ready (e.g. missing inferred test command when required) |
-| `gittensory_assumption` | Agent instructions leak gittensory-specific CI assumptions |
+| `loopover_assumption` | Agent instructions leak loopover-specific CI assumptions |
 | `clone_setup` | The repo has not been cloned to the expected cache path |
 | `other` | Unexpected errors |
 

@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "https://jsonbored.dev/schemas/gittensory-miner-goal-spec.json",
+  "$id": "https://jsonbored.dev/schemas/loopover-miner-goal-spec.json",
   "title": "MinerGoalSpec",
-  "description": "Per-repo miner configuration parsed from `.gittensory-miner.yml` (see packages/loopover-miner/docs/miner-goal-spec.md).",
+  "description": "Per-repo miner configuration parsed from `.loopover-miner.yml` (see packages/loopover-miner/docs/miner-goal-spec.md).",
   "type": "object",
   "additionalProperties": true,
   "properties": {
