@@ -29,6 +29,12 @@
   "plugins": [
     {
       "type": "node-workspace",
+      "merge": false
+    },
+    {
+      "type": "linked-versions",
+      "groupName": "engine-and-dependents",
+      "components": ["engine", "mcp", "miner"],
       "merge": true
     }
   ],

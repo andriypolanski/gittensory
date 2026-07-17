@@ -16,22 +16,26 @@ name: Package Release Please
 # default, these four packages have genuinely independent release cadences and separate publish
 # targets/workflows, and bundling them would work against this repo's small-focused-PR convention.
 #
-# node-workspace plugin merge: true (release-please-config.json) -- the exception to the above:
-# packages/loopover-mcp and packages/loopover-miner both carry a REAL runtime `dependencies` entry
-# on packages/loopover-engine, so they are not actually independent of it. With merge left at its
-# prior override (false), the plugin still bumps a dependent's `@loopover/engine` version range the
-# moment engine's own version changes, but does so on that dependent's OWN separate branch/PR --
-# meaning the dependent's package.json now requires an engine version that exists NOWHERE (not
-# locally on that branch, since engine's bump lives on a different unmerged branch; not on npm
-# either, since it hasn't published yet). `npm ci` then fails with ETARGET until a human notices and
-# manually walks engine's release through to publish before updating the dependent's branch --
-# confirmed live across several mcp/miner release cycles (#7086/#7087/#7107/#7108). merge: true is
-# the plugin's own purpose-built mechanism for exactly this: it combines a package with the
-# dependents its OWN dependency-bump logic pulled in as candidates into ONE PR/commit, so engine's
-# new version and its dependents' bumped ranges land together atomically -- npm workspaces then
-# resolves the dependency from the LOCAL checkout, which always satisfies the range regardless of
-# npm registry publish timing or ordering. packages/loopover-ui-kit has no dependency edge to any
-# other package here, so it is never pulled into this merge and keeps its fully independent cadence.
+# linked-versions plugin, group "engine-and-dependents" (release-please-config.json) -- the
+# exception to the above: packages/loopover-mcp and packages/loopover-miner both carry a REAL
+# runtime `dependencies` entry on packages/loopover-engine, so they are not actually independent of
+# it. The node-workspace plugin bumps a dependent's `@loopover/engine` version range the moment
+# engine's own version changes, but under plain separate-pull-requests: true that bump lands on the
+# dependent's OWN separate branch/PR -- meaning the dependent's package.json ends up requiring an
+# engine version that exists NOWHERE (not locally on that branch, since engine's bump lives on a
+# different unmerged branch; not on npm either, since it hasn't published yet). `npm ci` then fails
+# with ETARGET until a human notices and manually walks engine's release through to publish before
+# updating the dependent's branch -- confirmed live across several mcp/miner release cycles
+# (#7086/#7087/#7107/#7108/#7119/#7120/#7121; node-workspace's OWN `merge` option, tried first, does
+# NOT override separate-pull-requests -- verified against release-please's manifest.ts and
+# docs/manifest-releaser.md: separate-pull-requests is enforced as the final PR-splitting decision
+# regardless of what plugins attempt internally). linked-versions is the mechanism that actually
+# overrides per-component isolation, but ONLY for the named `components` in its group: engine's new
+# version and its dependents' bumped ranges land together in ONE PR/commit, so npm workspaces
+# resolves the dependency from the LOCAL checkout (always satisfies the range, regardless of npm
+# registry publish timing or ordering) instead of hitting the ETARGET race. packages/loopover-ui-kit
+# has no dependency edge to any other package here and is not in the group, so it keeps its fully
+# independent release cadence untouched.
 #
 # Runs on every push to main, not just a schedule: release-please is idempotent (it recomputes
 # purely from conventional-commit history since each component's last release tag), so the extra
