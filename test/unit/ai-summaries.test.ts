@@ -409,16 +409,22 @@ describe("optional deterministic-summary rewrite layer", () => {
   });
 
   it("routes every forbidden public term through the canonical sanitizer and falls back when AI is unsafe", async () => {
-    // Iterates every entry in FORBIDDEN_PUBLIC_COMMENT_WORDS (40+ words) as its own real round trip through
-    // rewriteSignalBundleWithAi -- legitimately more work than the default 15s test timeout reliably covers
-    // under load (observed timing out under concurrent CI shard contention, not a logic failure: every
-    // assertion that DID run passed). An explicit timeout says so instead of relying on ambient headroom.
+    // Iterates every entry in FORBIDDEN_PUBLIC_COMMENT_WORDS as its own real round trip through
+    // rewriteSignalBundleWithAi, sharing one env/D1 database across all of them instead of building a
+    // fresh one per word: createTestEnv() replays every migrations/*.sql file per call (test/helpers/d1.ts),
+    // so N fresh in-memory databases -- not rewriteSignalBundleWithAi itself -- was what previously pushed
+    // this test past vitest's default timeout under load. Sharing is safe here: every iteration lands on
+    // the "unsafe" branch, and sumAiEstimatedNeuronsSince only sums status "ok" rows (src/db/repositories.ts),
+    // so the shared daily neuron budget never accumulates across words.
+    let currentWord = "";
+    const run = vi.fn(async () => ({ response: `Looks great, includes ${currentWord} detail.` }));
+    const env = publicEnv({}, run);
     for (const word of FORBIDDEN_PUBLIC_COMMENT_WORDS) {
-      const run = vi.fn(async () => ({ response: `Looks great, includes ${word} detail.` }));
-      const result = await rewriteSignalBundleWithAi(publicEnv({}, run), rewriteReq());
+      currentWord = word;
+      const result = await rewriteSignalBundleWithAi(env, rewriteReq());
       expect(result, `forbidden word: ${word}`).toMatchObject({ status: "unsafe", text: DETERMINISTIC_BODY });
     }
-  }, 30000);
+  });
 
   it("rejects reward, ranking, scoreability, and reviewability variants in public AI rewrites", async () => {
     const unsafeOutputs = [
