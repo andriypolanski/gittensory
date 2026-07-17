@@ -2952,6 +2952,7 @@ export function createApp() {
     const number = Number(c.req.param("number"));
     if (!Number.isInteger(number) || number <= 0) return c.json({ error: "invalid_pull_number" }, 400);
     const body = await c.req.json().catch(() => null);
+    if (body === null) return c.json({ error: "invalid_chat_qa_request" }, 400);
     const parsed = chatQaRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid_chat_qa_request", issues: parsed.error.issues }, 400);
 

@@ -81,12 +81,12 @@ describe("POST /v1/repos/:owner/:repo/pulls/:number/chat-qa (#6489)", () => {
     await expect(res.json()).resolves.toMatchObject({ error: "invalid_chat_qa_request" });
   });
 
-  it("rejects invalid JSON the same way as a blank question (json().catch → schema fail)", async () => {
+  it("rejects invalid JSON the same way as a blank question (json().catch → null body)", async () => {
     const env = createTestEnv();
     await seedRepoWithPull(env);
     const res = await app.request("/v1/repos/owner/repo/pulls/11/chat-qa", { method: "POST", headers: apiHeaders(env), body: "{not-json" }, env);
     expect(res.status).toBe(400);
-    await expect(res.json()).resolves.toMatchObject({ error: "invalid_chat_qa_request" });
+    await expect(res.json()).resolves.toEqual({ error: "invalid_chat_qa_request" });
   });
 
   it("404s when the pull request is not cached", async () => {
