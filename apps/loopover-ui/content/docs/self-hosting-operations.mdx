@@ -444,12 +444,17 @@ less than 7 days is left alone, so a recent deploy is never at risk):
 
 <CodeBlock
   lang="bash"
-  code={`sudo cp systemd/loopover-docker-prune.service.example /etc/systemd/system/loopover-docker-prune.service
-sudo cp systemd/loopover-docker-prune.timer.example /etc/systemd/system/loopover-docker-prune.timer
-sudo $EDITOR /etc/systemd/system/loopover-docker-prune.service   # set WorkingDirectory / ExecStart to your path
+  code={`sudo cp systemd/loopover-docker-prune@.service.example /etc/systemd/system/loopover-docker-prune@.service
+sudo cp systemd/loopover-docker-prune@.timer.example /etc/systemd/system/loopover-docker-prune@.timer
 sudo systemctl daemon-reload
-sudo systemctl enable --now loopover-docker-prune.timer`}
+INSTANCE=$(systemd-escape -p /opt/loopover)   # substitute your loopover install path
+sudo systemctl enable --now "loopover-docker-prune@\${INSTANCE}.timer"`}
 />
+
+This is a templated (instantiated) unit — the instance name is your loopover install path,
+systemd-escaped, so the same pair of installed unit files can prune Docker resources for more
+than one loopover install on a host, or be copied verbatim across a fleet, without editing a
+per-install path by hand.
 
 Run it manually at any time with `docker system df` before and after to see what
 it reclaimed: `sh scripts/selfhost-docker-prune.sh`.

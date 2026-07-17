@@ -1,0 +1,37 @@
+# Runs scripts/selfhost-docker-prune.sh on a schedule (paired with loopover-docker-prune@.timer.example) to
+# reclaim unused Docker images and build cache before disk fills up on a long-running self-host deployment.
+#
+# TEMPLATED UNIT (#4894): the `@` in the filename makes this a systemd instantiated unit, so ONE pair of
+# installed unit files can prune Docker resources for any number of loopover installs on the same host (or
+# be copied verbatim to every host in a fleet) without hand-editing a WorkingDirectory/ExecStart path per
+# instance. The instance name (the string after `@` when you enable it) IS the install path, systemd-escaped
+# -- `%I` below expands back to the real, unescaped path.
+#
+# Install (repeat the last two lines once per loopover install path on this host):
+#   sudo cp systemd/loopover-docker-prune@.service.example /etc/systemd/system/loopover-docker-prune@.service
+#   sudo cp systemd/loopover-docker-prune@.timer.example /etc/systemd/system/loopover-docker-prune@.timer
+#   sudo systemctl daemon-reload
+#   INSTANCE=$(systemd-escape -p /opt/loopover)   # -> "opt-loopover"; repeat per install path if more than one
+#   sudo systemctl enable --now "loopover-docker-prune@${INSTANCE}.timer"
+#
+# A single-instance host works exactly the same way -- there is no non-templated form anymore; just pick one
+# instance name (e.g. `systemd-escape -p /opt/loopover`) and enable that.
+#
+# This is a HOST-level unit, not a Docker Compose service: reclaiming images/build-cache needs real Docker
+# daemon access, which no container in docker-compose.yml is granted (see that file's docker-proxy and
+# runner service comments for why raw /var/run/docker.sock exposure into a container is avoided).
+
+[Unit]
+Description=LoopOver self-host Docker resource hygiene (image + build-cache prune) for %I
+After=docker.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+# %I is the unescaped instance name -- the loopover install path you passed to `systemd-escape -p`.
+WorkingDirectory=%I
+ExecStart=/bin/sh %I/scripts/selfhost-docker-prune.sh
+# Optional: override the default 7-day (168h) safety window before an unused image/build-cache entry is
+# eligible for removal. Per-instance overrides need a matching per-instance drop-in
+# (systemctl edit "loopover-docker-prune@<instance>.service") rather than editing this shared template.
+# Environment=LOOPOVER_DOCKER_PRUNE_RETAIN_HOURS=168
