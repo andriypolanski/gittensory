@@ -69,6 +69,13 @@ describe("requestDeviceCode (#5682)", () => {
     await expect(requestDeviceCode({ clientId: "c", fetchFn })).rejects.toMatchObject({ code: "device_code_request_failed" });
   });
 
+  it("REGRESSION (#6988): bounds the fetch with a request timeout so a stalled connection can't hang forever", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ device_code: "dc1", user_code: "u", verification_uri: "v" }));
+    await requestDeviceCode({ clientId: "c", fetchFn });
+    const [, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
   it("throws device_code_response_invalid when a required field is missing", async () => {
     const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ device_code: "dc1" }));
     await expect(requestDeviceCode({ clientId: "c", fetchFn })).rejects.toMatchObject({ code: "device_code_response_invalid" });
@@ -110,6 +117,35 @@ describe("pollForAccessToken (#5682)", () => {
     const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ access_token: "gho_xyz" }));
     const result = await pollForAccessToken({ clientId: "c", deviceCode: "dc1", fetchFn, sleepFn: noSleep });
     expect(result.scope).toBe("");
+  });
+
+  it("REGRESSION (#6988): bounds each poll's fetch with a request timeout so a stalled connection can't hang forever", async () => {
+    const fetchFn = vi.fn().mockResolvedValue(jsonResponse({ access_token: "gho_xyz" }));
+    await pollForAccessToken({ clientId: "c", deviceCode: "dc1", fetchFn, sleepFn: noSleep });
+    const [, init] = fetchFn.mock.calls[0] as [string, RequestInit];
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("REGRESSION (#6988): a timed-out/rejected fetch is a per-attempt failure that still retries, not an unhandled crash", async () => {
+    const fetchFn = vi
+      .fn()
+      .mockRejectedValueOnce(new DOMException("The operation was aborted", "TimeoutError"))
+      .mockResolvedValueOnce(jsonResponse({ access_token: "gho_after_timeout" }));
+    const result = await pollForAccessToken({ clientId: "c", deviceCode: "dc1", fetchFn, sleepFn: noSleep });
+    expect(result.accessToken).toBe("gho_after_timeout");
+    expect(fetchFn).toHaveBeenCalledTimes(2);
+  });
+
+  it("REGRESSION (#6988): a permanently stalled connection still respects the deadline instead of hanging forever", async () => {
+    let clock = 0;
+    const now = () => clock;
+    const sleepFn = vi.fn().mockImplementation(async (ms: number) => {
+      clock += ms;
+    });
+    const fetchFn = vi.fn().mockRejectedValue(new DOMException("The operation was aborted", "TimeoutError"));
+    await expect(
+      pollForAccessToken({ clientId: "c", deviceCode: "dc1", intervalSeconds: 5, expiresInSeconds: 12, fetchFn, sleepFn, now }),
+    ).rejects.toMatchObject({ code: "expired_token" });
   });
 
   it("keeps polling on authorization_pending until a token is granted", async () => {
