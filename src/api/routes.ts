@@ -4174,7 +4174,8 @@ export function createApp() {
       console.error(JSON.stringify({ level: "error", event: "orb_broker_mint_failed", message: message.slice(0, 200) }));
       return c.json({ error: "broker_error" }, 503);
     }
-    if ("error" in result) return c.json(result, result.error === "invalid_enrollment" ? 401 : result.error === "broker_misconfigured" ? 503 : 403);
+    if ("error" in result)
+      return c.json(result, result.error === "invalid_enrollment" ? 401 : result.error === "broker_misconfigured" ? 503 : result.error === "unsupported_secret_type" ? 500 : 403);
     return c.json(result);
   });
 

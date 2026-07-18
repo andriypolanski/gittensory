@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { createApp } from "../../src/api/routes";
-import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment } from "../../src/orb/broker";
+import { brokerOrbToken, isOrbBrokerEnabled, issueOrbEnrollment, ORB_SECRET_TYPE_GITHUB_TOKEN } from "../../src/orb/broker";
 import { MAX_ORB_RELAY_REGISTER_BODY_BYTES } from "../../src/orb/relay";
 import { createTestEnv, type TestD1Database } from "../helpers/d1";
 
@@ -57,9 +57,18 @@ describe("issueOrbEnrollment", () => {
     await seedInstall(e, 201, { registered: 1 });
     const issued = await issueOrbEnrollment(e, 201);
     expect(issued).toMatchObject({ enrollId: expect.stringMatching(/^orbenr_/), secret: expect.stringMatching(/^orbsec_/) });
-    const row = await db(e).prepare("SELECT state, installation_id, secret_hash FROM orb_enrollments WHERE installation_id=201").first<{ state: string; installation_id: number; secret_hash: string }>();
+    const row = await db(e).prepare("SELECT state, installation_id, secret_hash, secret_type FROM orb_enrollments WHERE installation_id=201").first<{ state: string; installation_id: number; secret_hash: string; secret_type: string }>();
     expect(row).toMatchObject({ state: "enrolled", installation_id: 201 });
     expect(row?.secret_hash).not.toContain("orbsec"); // stored hashed, never plaintext
+    expect(row?.secret_type).toBe(ORB_SECRET_TYPE_GITHUB_TOKEN); // #7174: defaults to the only mintable type today
+  });
+
+  it("#7174: records a caller-supplied secretType instead of the default", async () => {
+    const e = await brokerEnv();
+    await seedInstall(e, 202, { registered: 1 });
+    await issueOrbEnrollment(e, 202, undefined, "ai_provider_key");
+    const row = await db(e).prepare("SELECT secret_type FROM orb_enrollments WHERE installation_id=202").first<{ secret_type: string }>();
+    expect(row?.secret_type).toBe("ai_provider_key");
   });
 });
 
@@ -71,6 +80,13 @@ describe("brokerOrbToken", () => {
     tokenFetch("ghs_minted", "2026-06-25T08:00:00Z", { contents: "write" });
     expect(await brokerOrbToken(e, secret)).toEqual({ token: "ghs_minted", installationId: 300, expiresAt: "2026-06-25T08:00:00Z", permissions: { contents: "write" } });
     expect((await db(e).prepare("SELECT last_token_at FROM orb_enrollments WHERE installation_id=300").first<{ last_token_at: string | null }>())?.last_token_at).not.toBeNull();
+  });
+
+  it("#7174: refuses to GitHub-mint a row recorded for a different secret type, before checking install eligibility or App credentials", async () => {
+    const e = await brokerEnvMissingAppCreds("both");
+    await seedInstall(e, 314, { registered: 1 });
+    const { secret } = (await issueOrbEnrollment(e, 314, undefined, "ai_provider_key")) as { secret: string };
+    expect(await brokerOrbToken(e, secret)).toEqual({ error: "unsupported_secret_type" });
   });
 
   it("caches a freshly minted token and serves repeated exchanges without reminting", async () => {
@@ -265,6 +281,15 @@ describe("broker endpoints", () => {
     const { secret } = (await issueOrbEnrollment(e, 401)) as { secret: string };
     await db(e).prepare("UPDATE orb_github_installations SET registered=0 WHERE installation_id=401").run();
     expect((await app.request("/v1/orb/token", { method: "POST", headers: { authorization: `Bearer ${secret}` } }, e)).status).toBe(403);
+  });
+
+  it("#7174: /v1/orb/token: 500 for an enrollment recorded under an unsupported secret type", async () => {
+    const e = await brokerEnv();
+    await seedInstall(e, 403, { registered: 1 });
+    const { secret } = (await issueOrbEnrollment(e, 403, undefined, "ai_provider_key")) as { secret: string };
+    const res = await app.request("/v1/orb/token", { method: "POST", headers: { authorization: `Bearer ${secret}` } }, e);
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: "unsupported_secret_type" });
   });
 
   it("/v1/orb/token rejects oversized force-refresh bodies before parsing or validating the bearer", async () => {

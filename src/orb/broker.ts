@@ -19,6 +19,13 @@ import { createOrbInstallationToken } from "./app-auth";
 // entry is never handed out (covers clock skew + the engine's own ~5m cache margin).
 const ORB_TOKEN_CACHE_MIN_REMAINING_MS = 10 * 60_000;
 
+// The only secret type this broker actually knows how to mint today (#7174). The `secret_type` column exists
+// so a future AI-provider-key / DB-credential mint strategy (the hosted control-plane's provisioning core,
+// #7180) can record what an enrollment row is FOR without inventing a second table — but until that strategy
+// exists, any row carrying a different value is a config/data error brokerOrbToken must refuse, not silently
+// GitHub-mint against.
+export const ORB_SECRET_TYPE_GITHUB_TOKEN = "github_token";
+
 export function isOrbBrokerEnabled(env: Env): boolean {
   return /^(1|true|yes|on)$/i.test(String(env.ORB_BROKER_ENABLED ?? "").trim());
 }
@@ -28,11 +35,13 @@ export type IssueResult = { enrollId: string; secret: string } | { error: "insta
 /** Mint a one-time enrollment secret for a REGISTERED install. Returns the plaintext secret ONCE (stored only
  *  hashed). Issued by the operator (internal endpoint) OR by a maintainer who proved install-admin via OAuth —
  *  in the latter case the maintainer's GitHub identity is recorded for audit. installation_id is bound here and
- *  read back (never from the request) at token-exchange time, so a secret can never mint a token for another install. */
+ *  read back (never from the request) at token-exchange time, so a secret can never mint a token for another
+ *  install. `secretType` defaults to the only mintable type today; every existing caller is unaffected. */
 export async function issueOrbEnrollment(
   env: Env,
   installationId: number,
   maintainer?: { login: string; githubId?: number | null | undefined },
+  secretType: string = ORB_SECRET_TYPE_GITHUB_TOKEN,
 ): Promise<IssueResult> {
   const install = await env.DB.prepare("SELECT registered FROM orb_github_installations WHERE installation_id = ?").bind(installationId).first<{ registered: number }>();
   if (!install) return { error: "installation_not_found" };
@@ -40,17 +49,17 @@ export async function issueOrbEnrollment(
   const enrollId = createOpaqueToken("orbenr");
   const secret = createOpaqueToken("orbsec");
   await env.DB.prepare(
-    `INSERT INTO orb_enrollments (enroll_id, installation_id, maintainer_login, maintainer_github_id, secret_hash, state, authorized_at, enrolled_at)
-     VALUES (?, ?, ?, ?, ?, 'enrolled', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+    `INSERT INTO orb_enrollments (enroll_id, installation_id, maintainer_login, maintainer_github_id, secret_hash, secret_type, state, authorized_at, enrolled_at)
+     VALUES (?, ?, ?, ?, ?, ?, 'enrolled', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
   )
-    .bind(enrollId, installationId, maintainer?.login ?? null, maintainer?.githubId ?? null, await hashToken(secret))
+    .bind(enrollId, installationId, maintainer?.login ?? null, maintainer?.githubId ?? null, await hashToken(secret), secretType)
     .run();
   return { enrollId, secret };
 }
 
 export type BrokerResult =
   | { token: string; installationId: number; expiresAt: string; permissions: Record<string, string> }
-  | { error: "invalid_enrollment" | "installation_not_eligible" | "broker_misconfigured" };
+  | { error: "invalid_enrollment" | "installation_not_eligible" | "broker_misconfigured" | "unsupported_secret_type" };
 
 /** The container's token-exchange: a valid enrollment secret → a short-lived installation token for the BOUND
  *  install. installation_id is read from the enrollment row, never the caller; the install must still be
@@ -62,10 +71,14 @@ export async function brokerOrbToken(env: Env, secret: string, options: { forceR
     console.warn(JSON.stringify({ level: "warn", event: "orb_broker_no_encryption_key", message: "TOKEN_ENCRYPTION_SECRET is not set; broker token cache is disabled. Set this variable to enable caching and reduce GitHub throttle risk." }));
   }
   const row = await env.DB
-    .prepare("SELECT enroll_id, installation_id, state, revoked_at, cached_token_json FROM orb_enrollments WHERE secret_hash = ?")
+    .prepare("SELECT enroll_id, installation_id, state, revoked_at, cached_token_json, secret_type FROM orb_enrollments WHERE secret_hash = ?")
     .bind(await hashToken(secret))
-    .first<{ enroll_id: string; installation_id: number; state: string; revoked_at: string | null; cached_token_json: string | null }>();
+    .first<{ enroll_id: string; installation_id: number; state: string; revoked_at: string | null; cached_token_json: string | null; secret_type: string }>();
   if (!row || row.state !== "enrolled" || row.revoked_at !== null) return { error: "invalid_enrollment" };
+  // Checked once the caller is already proven to hold a valid enrollment (same ordering rationale as the App-
+  // credential check below, #2710) — this endpoint only ever mints GitHub installation tokens; a row recorded
+  // for a different secret type belongs to a different mint strategy that doesn't exist yet.
+  if (row.secret_type !== ORB_SECRET_TYPE_GITHUB_TOKEN) return { error: "unsupported_secret_type" };
   const install = await env.DB
     .prepare("SELECT registered, suspended_at, removed_at FROM orb_github_installations WHERE installation_id = ?")
     .bind(row.installation_id)
