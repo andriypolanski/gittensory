@@ -237,13 +237,14 @@ async function githubGetJson(
   // `extraHeaders` carries per-call additions (e.g. a policy-doc If-None-Match, #4842) on top of the base auth set.
   // requestTimeoutMs bounds each individual attempt so a stalled connection can't hang discovery forever
   // (#miner-github-read-timeouts) -- fetchWithRetry gives each retry its own fresh AbortSignal.timeout().
+  // Spread-omit sleepFn when absent rather than passing `sleepFn: undefined` -- FetchWithRetryOptions doesn't
+  // widen its optional properties to `| undefined`, and exactOptionalPropertyTypes treats those as different.
+  const retryOptions = { ...(options?.sleepFn ? { sleepFn: options.sleepFn } : {}), timeoutMs: options?.requestTimeoutMs };
   const response = await fetchWithRetry(
     fetch as (url: unknown, init?: unknown) => Promise<Response>,
     url,
     { method: "GET", headers: { ...githubHeaders(githubToken, options.forge), ...extraHeaders } },
-    // Spread-omit sleepFn when absent rather than passing `sleepFn: undefined` -- FetchWithRetryOptions doesn't
-    // widen its optional properties to `| undefined`, and exactOptionalPropertyTypes treats those as different.
-    { ...(options?.sleepFn ? { sleepFn: options.sleepFn } : {}), timeoutMs: options?.requestTimeoutMs },
+    retryOptions,
   );
   recordRateLimit(summary, response);
   const payload = await response.json().catch(() => null);
