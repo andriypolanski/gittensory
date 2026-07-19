@@ -152,11 +152,6 @@ export const AMS_ENV_REFERENCE_ROWS: MinerEnvReferenceRow[] = [
     defaultValue: null,
   },
   {
-    name: "LOOPOVER_MINER_REPO_CLONE_DIR",
-    firstReference: "lib/repo-clone.js",
-    defaultValue: "",
-  },
-  {
     name: "LOOPOVER_MINER_RUN_STATE_DB",
     firstReference: "lib/run-state.js",
     defaultValue: null,
@@ -249,7 +244,6 @@ export const AMS_ENV_REFERENCE_MARKDOWN = [
   "| `LOOPOVER_MINER_PREDICTION_LEDGER_DB` | `lib/prediction-ledger.js` | (none) |",
   "| `LOOPOVER_MINER_RANKED_CANDIDATES_DB` | `lib/ranked-candidates.js` | (none) |",
   "| `LOOPOVER_MINER_REPLAY_SNAPSHOT_DB` | `lib/replay-snapshot.js` | (none) |",
-  '| `LOOPOVER_MINER_REPO_CLONE_DIR` | `lib/repo-clone.js` | `""` |',
   "| `LOOPOVER_MINER_RUN_STATE_DB` | `lib/run-state.js` | (none) |",
   "| `LOOPOVER_MINER_SENTRY_DSN` | `lib/sentry.js` | (none) |",
   '| `LOOPOVER_MINER_SENTRY_ENVIRONMENT` | `lib/sentry.js` | `"production"` |',
