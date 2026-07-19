@@ -54,16 +54,25 @@ describe("generated-artifact drift checks are wired into CI, not just local test
     expect(condition).toContain("needs.changes.outputs.ui == 'true'");
   });
 
-  it("all three drift-check steps share the exact same gating condition", () => {
+  // Docs drift check additionally reads packages/loopover-engine/src/focus-manifest.ts (cross-checked
+  // against .loopover.yml.example), a dependency its two siblings don't share -- so its condition is a
+  // deliberate superset (backend || ui || engine) rather than byte-identical to theirs. The invariant this
+  // test enforces is "every check still fires on backend OR ui at minimum" (already covered by the
+  // it.each above), not "all three conditions are identical" -- padding `engine` onto the other two just
+  // to preserve exact-string uniformity would misrepresent what they actually depend on.
+  it("Docs drift check's condition is engine-widened; its two siblings stay on backend||ui only", () => {
     const workflow = readYaml(".github/workflows/ci.yml");
     const validateCode = record(record(workflow.jobs, "workflow.jobs")["validate-code"], "workflow.jobs.validate-code");
     const steps = recordArray(validateCode.steps, "jobs.validate-code.steps");
 
-    const conditions = checks.map(({ stepName }) => {
+    const conditionFor = (stepName: string) => {
       const step = steps.find((entry) => entry.name === stepName);
       expect(step).toBeDefined();
       return String(step!.if);
-    });
-    expect(new Set(conditions).size).toBe(1);
+    };
+
+    expect(conditionFor("Docs drift check")).toContain("needs.changes.outputs.engine == 'true'");
+    expect(conditionFor("Selfhost env-reference drift check")).not.toContain("needs.changes.outputs.engine");
+    expect(conditionFor("Command reference drift check")).not.toContain("needs.changes.outputs.engine");
   });
 });

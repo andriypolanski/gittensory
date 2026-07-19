@@ -45,9 +45,11 @@ describe("observability config CI guard", () => {
     expect(neutralizeStep).toBeDefined();
     expect(neutralizeStep!.run).toBe("rm -f .npmrc");
     expect(validateStep).toBeDefined();
-    expect(String(validateStep!.if)).toBe(
-      "${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.observability == 'true' }}",
-    );
+    // Not gated on `backend`: scripts/validate-observability-configs.mjs only ever reads
+    // grafana/dashboards/*.json and prometheus/rules/alerts.yml, both fully covered by the
+    // `observability` filter checked above -- a `backend` clause had no structural justification and ran
+    // this on every backend PR (the highest-volume PR shape in the repo) for nothing.
+    expect(String(validateStep!.if)).toBe("${{ github.event_name == 'push' || needs.changes.outputs.observability == 'true' }}");
     expect(record(validateStep!.env, "validateStep.env").NODE_OPTIONS).toBe("");
     expect(validateStep!.run).toBe("node scripts/validate-observability-configs.mjs");
   });

@@ -7,7 +7,17 @@
     "declaration": false,
     "rootDir": "src",
     "outDir": "dist",
-    "noEmit": false
+    "noEmit": false,
+    // Without this, the inherited root value (tsconfig.json:24, "./.tsbuildinfo") resolves relative to the
+    // ROOT config's location, not this one -- this package's build and the root Typecheck step would then
+    // read/write the exact same cache file at the repo root and corrupt each other's incremental state,
+    // same collision packages/loopover-engine/tsconfig.json and packages/loopover-miner/tsconfig.json
+    // already document and fix the same way. Confirmed empirically: `rm .tsbuildinfo && tsc -p
+    // packages/discovery-index/tsconfig.json` wrote the repo-root .tsbuildinfo, not a package-local one,
+    // and a subsequent root `tsc --noEmit` then paid the full ~14s cold-recheck cost instead of the
+    // documented ~3.6s warm one -- silent perf regression, not a correctness bug (TS safely discards a
+    // mismatched buildinfo and rechecks from scratch), but real on every local `npm run test:ci`.
+    "tsBuildInfoFile": "./.tsbuildinfo"
   },
   "include": ["src"]
 }

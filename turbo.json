@@ -61,31 +61,71 @@
       "dependsOn": ["^build"],
       "outputs": ["dist/**"]
     },
+    // apps/loopover-ui/src also imports three files this app has no formal package.json dependency on:
+    // root src/signals/redaction.ts (from lib/browser-sentry.ts), root src/signals/focus-manifest.ts (from
+    // lib/registration-workspace.ts) -- both real, always-bundled production imports -- and
+    // packages/loopover-engine/src/miner/driver-factory.ts (from a .test.tsx file, so typecheck-only, not
+    // build). None of these were hashed before, so a change to any of them with apps/loopover-ui itself
+    // unchanged could give a false cache HIT on this task -- the same class of bug already found and fixed
+    // in the root //#typecheck task, just missed here during that audit. Confirmed via grep: `grep -rn
+    // "\.\./\.\./\.\./\.\./" apps/loopover-ui/src` finds exactly these three cross-boundary imports, no
+    // others. @loopover/engine#build is added as an explicit dependsOn edge (rather than hand-listing
+    // driver-factory.ts as an input) since engine has no default inputs override -- its whole src/** is
+    // already hashed by that task, so depending on it transitively covers this file (and any other engine
+    // file a future test might import) without needing to track individual paths here too.
     "@loopover/ui#typecheck": {
-      "dependsOn": ["^build"],
+      "dependsOn": ["^build", "@loopover/engine#build"],
       "inputs": [
         "$TURBO_DEFAULT$",
         "$TURBO_ROOT$/worker-configuration.d.ts",
-        "$TURBO_ROOT$/src/env.d.ts"
+        "$TURBO_ROOT$/src/env.d.ts",
+        "$TURBO_ROOT$/src/signals/redaction.ts",
+        "$TURBO_ROOT$/src/signals/focus-manifest.ts"
       ],
       "outputs": []
     },
     "@loopover/ui#lint": {
       "outputs": []
     },
+    // Same two root src/signals files as @loopover/ui#typecheck above -- both real production imports
+    // (src/client.ts and src/routes/__root.tsx transitively pull them in), so vite's actual bundle depends
+    // on them. Previously had no inputs override at all (bare $TURBO_DEFAULT$, own directory only). Does
+    // NOT need the engine dependsOn edge @loopover/ui#typecheck has: the only file reaching into
+    // packages/loopover-engine is imported from a .test.tsx file, which isn't part of the production build.
     "@loopover/ui#build": {
       "dependsOn": ["^build", "@loopover/extension#build", "@loopover/miner-extension#build"],
+      "inputs": [
+        "$TURBO_DEFAULT$",
+        "$TURBO_ROOT$/src/signals/redaction.ts",
+        "$TURBO_ROOT$/src/signals/focus-manifest.ts"
+      ],
       "outputs": ["dist/**"]
     },
+    // apps/loopover-miner-ui/src (typecheck) imports from packages/loopover-miner/lib/chat-action-registry
+    // /chat-action-dispatch/chat-governor-actions -- 5 files reaching in via relative path, with no
+    // package.json dependency on @loopover/miner to create a ^build edge, and no existing inputs override
+    // (bare $TURBO_DEFAULT$). Same class of bug as @loopover/ui#typecheck above. Scoped to the whole
+    // packages/loopover-miner/lib/** directory (not the 5 specific files) to match the same "don't
+    // hand-track an ever-growing cross-package surface" reasoning already applied to //#typecheck's fix --
+    // this UI already imports 5 files from that one directory, more is a matter of when, not if.
     "@loopover/ui-miner#typecheck": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/loopover-miner/lib/**"],
       "outputs": []
     },
     "@loopover/ui-miner#lint": {
       "outputs": []
     },
+    // apps/loopover-miner-ui's root-level vite-*-api.ts dev-server plugins (vite-attempt-api.ts,
+    // vite-chat-api.ts, and 7 others) contain 14 dynamic import()s reaching into
+    // packages/loopover-miner/lib/** and one into packages/loopover-engine/dist/index.js -- same
+    // directory added defensively as @loopover/ui-miner#typecheck above. These execute inside vite's
+    // configureServer request-handler hooks (vite dev only), so they likely don't affect this task's
+    // actual `vite build` bundle output -- but that's inference from reading the plugin code, not proven
+    // the way the typecheck gap above was, so the input is added here too rather than left asymmetric.
     "@loopover/ui-miner#build": {
       "dependsOn": ["^build"],
+      "inputs": ["$TURBO_DEFAULT$", "$TURBO_ROOT$/packages/loopover-miner/lib/**"],
       "outputs": ["dist/**"]
     },
     "@loopover/extension#lint": {

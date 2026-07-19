@@ -299,9 +299,13 @@ jobs:
       # apps/loopover-ui/src/lib/ams-env-reference.ts had gone stale). Confirmed harmful live: this
       # exact gap let a stale env-reference block an unrelated MCP npm release, since the release
       # workflow was the only place this check ever ran. Gated on `ui` too, same reason as its sibling:
-      # the generated UI-side file lives under apps/loopover-ui/**.
+      # the generated UI-side file lives under apps/loopover-ui/**. Also gated on `engine`:
+      # DEFAULT_SOURCE_ROOTS in generate-env-reference.mjs explicitly includes
+      # packages/loopover-engine/src/miner (the coding-agent driver's env vars live there, not under
+      # packages/loopover-miner itself), so an engine-only PR touching that directory used to skip this
+      # check entirely.
       - name: Miner env-reference drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npm run miner:env-reference:check
       # Same generated-artifact-drift class, extracted from src/github/commands.ts's command catalogs (#3046).
       # Also local-only until now; same backend-or-ui gating rationale as the step above.
@@ -312,9 +316,14 @@ jobs:
       # modes) -- see the script's own header comment. Also local-only until now; gated on `ui` as well as
       # `backend` since the docs pages it validates are themselves UI-side content that can drift on their
       # own (a docs-only edit that renames/drops a documented flag/command/gate-mode) with no backend change
-      # to trigger a re-check otherwise.
+      # to trigger a re-check otherwise. Also gated on `engine`, unlike its two siblings above (`Selfhost
+      # env-reference drift check`/`Command reference drift check`): this script's readFileSync reads
+      # packages/loopover-engine/src/focus-manifest.ts directly to cross-check FocusManifest fields against
+      # .loopover.yml.example, a dependency the other two generated-artifact-drift checks don't share, so
+      # deliberately NOT kept uniform with them here (test/unit/ci-generated-artifact-drift-checks.test.ts
+      # asserts backend||ui is a SUBSET of every condition, not that all three are byte-identical).
       - name: Docs drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ui == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npm run docs:drift-check
       # Cross-checks the bundled fallback YAML in src/config/loopover-repo-focus-manifest.ts against the
       # real root .loopover.yml -- see the script's own header comment. Same local-only-until-now gap as
@@ -326,16 +335,21 @@ jobs:
         run: npm run manifest:drift-check
       # Mechanical drift tripwire for the hand-duplicated src/{review,settings,signals} <-> loopover-engine
       # twin files, plus a version-skew check on the installed @loopover/engine (#4260). Same
-      # local-only-until-now gap as the drift checks above.
+      # local-only-until-now gap as the drift checks above. Also gated on `miner`: the reverse-direction
+      # version pin this script checks, packages/loopover-miner/expected-engine.version, lives under the
+      # miner package, not engine or backend -- a PR editing only that one pin file used to skip its own
+      # consistency check entirely.
       - name: Engine-parity drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' }}
         run: npm run engine-parity:drift-check
       # Guards against the "gittensory" branding creeping back into runtime source after the LoopOver
       # rebrand -- see the script's own header comment (#6786 is the concrete incident this was written
       # for). Scoped broadly (src/** plus every workspace package's bin/lib/src/scripts dirs), so it's
-      # gated broadly to match; same local-only-until-now gap as the drift checks above.
+      # gated broadly to match; same local-only-until-now gap as the drift checks above. Also gated on
+      # `discoveryIndex`: BRANDING_DRIFT_PATHSPECS includes "packages/*/src/**/*.ts", which matches
+      # packages/discovery-index/src/**.
       - name: Branding drift check
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.discoveryIndex == 'true' }}
         run: npm run branding-drift:check
       # .release-please-manifest.json is release-please's own state file -- it normally keeps this in
       # sync itself when its generated Release PR merges, but the documented human-override path for
@@ -348,8 +362,13 @@ jobs:
       - name: Release-please manifest sync check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.ui == 'true' }}
         run: npm run release-manifest:sync:check
+      # Not gated on `backend`: read the full script -- it only ever reads grafana/dashboards/*.json and
+      # prometheus/rules/alerts.yml, both fully covered by the `observability` filter above, with zero
+      # reference to any src/, test/, or other backend path. The `backend` clause had no structural
+      # justification and made this run on every backend PR (the highest-volume PR shape in the repo) for
+      # nothing.
       - name: Validate observability configs
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.observability == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.observability == 'true' }}
         env:
           NODE_OPTIONS: ""
         run: node scripts/validate-observability-configs.mjs
@@ -385,14 +404,25 @@ jobs:
       # would otherwise write to .turbo/cache AFTER the snapshot already happened, so none of their cache
       # entries would ever persist cross-run. Confirmed this was a real gap (not just theoretical) by
       # reading the actual step order before moving it.
+      #
+      # Key uses a "turbo-code-" prefix, distinct from validate-tests' "turbo-tests-" prefix below, even
+      # though both jobs cache the same .turbo/cache path and both build @loopover/engine -- they used to
+      # share one "turbo-" prefix, which meant all 7 jobs in a single run (this one plus 6 validate-tests
+      # shards) raced for the SAME cache key. actions/cache/save no-ops on a duplicate key within a run (see
+      # the comment on validate-tests' own Save step below), and a validate-tests shard reaches its Save
+      # step after only ~6 steps versus this job's ~20+, so a shard almost always won the race -- meaning
+      # the richer cache this job builds (engine + mcp + miner + ui-kit + ui + extension) was very likely
+      # silently discarded in favor of a shard's much leaner engine-only save, defeating most of the point
+      # of the Save-repositioning fix above. Splitting the prefixes gives each job's Restore/Save pair its
+      # own independent lineage instead of racing.
       - name: Restore Turborepo cache
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.ui == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.miner == 'true' }}
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo/cache
-          key: turbo-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
+          key: turbo-code-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
           restore-keys: |
-            turbo-${{ hashFiles('package-lock.json') }}-
+            turbo-code-${{ hashFiles('package-lock.json') }}-
       - name: Build engine package
         if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.ui == 'true' }}
         run: npx turbo run build --filter=@loopover/engine
@@ -419,8 +449,16 @@ jobs:
       # graph natively and precisely, with zero drift risk, and already delivers the actual measured
       # speedup (~13.5s cold vs ~3.6s warm) -- wrapping it in turbo would layer a cruder, hand-maintained
       # approximation on top of a mechanism that's already strictly more correct for this specific task.
+      # Gated on engine/mcp/miner too, not just backend: root src/** genuinely imports across those three
+      # package boundaries (~57 files import @loopover/engine directly; src/mcp/find-opportunities.ts
+      # imports packages/loopover-miner/lib/opportunity-fanout.js and opportunity-ranker.js;
+      # src/services/mcp-compatibility.ts imports packages/loopover-mcp/package.json), so a type-only
+      # regression introduced in any of those three packages, on a PR that touches only that package, used
+      # to skip this check entirely -- not caught until the push-triggered run on main, after this repo's
+      # auto-merge gate had already merged it. tsc's own --incremental engine (unaffected by this widening;
+      # see its own comment two steps up) already tracks the real graph regardless of which trigger fired.
       - name: Typecheck
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.miner == 'true' }}
         run: npm run typecheck
       - name: Save TypeScript incremental build cache
         if: ${{ !cancelled() && (github.event_name == 'push' || needs.changes.outputs.backend == 'true') }}
@@ -428,8 +466,14 @@ jobs:
         with:
           path: .tsbuildinfo
           key: tsbuildinfo-${{ hashFiles('tsconfig.json', 'package-lock.json') }}-${{ github.run_id }}
+      # Same engine/mcp/miner gap as Typecheck above, and more consequential here: test/workers/worker-
+      # runtime.test.ts (vitest.config.ts excludes it from the main "Test with coverage" run below, so
+      # nothing else in CI runs it) imports src/index and src/api/routes, which themselves import
+      # find-opportunities.ts (miner) and mcp-compatibility.ts (mcp) -- this is the only test in all of CI
+      # that boots the real Cloudflare Workers runtime end-to-end, and it used to never run at all on an
+      # engine/mcp/miner-only PR.
       - name: Worker runtime tests
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.backend == 'true' || needs.changes.outputs.engine == 'true' || needs.changes.outputs.mcp == 'true' || needs.changes.outputs.miner == 'true' }}
         run: npm run test:workers
       # loopover-mcp now depends on @loopover/engine for real (isTestFile/isCodeFile), so a
       # PR that only touches packages/loopover-engine/** must also rebuild + pack-check the mcp package,
@@ -468,8 +512,11 @@ jobs:
       - name: Miner package check
         if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npm run test:miner-pack
+      # scripts/check-miner-deployment-docs.mjs reads packages/loopover-engine/src/miner/**/*.ts
+      # (ENGINE_MINER_DIR) to build the registered-commands list checked against DEPLOYMENT.md, so an
+      # engine-only PR touching that directory used to skip this audit entirely.
       - name: Miner deployment docs audit
-        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' }}
+        if: ${{ github.event_name == 'push' || needs.changes.outputs.miner == 'true' || needs.changes.outputs.engine == 'true' }}
         run: npm run test:miner-deployment-docs-audit
       # review-enrichment is not an npm workspace member (its own package-lock.json), so it needs its own
       # cache entry -- same restore/save-after-success pattern and fork/trusted key split as the root
@@ -587,9 +634,25 @@ jobs:
       - name: UI typecheck
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
         run: npx turbo run typecheck --filter=@loopover/ui --filter=@loopover/ui-miner
-      - name: UI tests
+      # Split into 3 independent steps (was one `&&`-chained step) -- turbo.json deliberately has no `test`
+      # task for any package (per the plan doc: test orchestration stays out of Turborepo entirely, so
+      # Codecov's codecov/patch keeps one centralized source of truth), so this can't use the same
+      # union-`--filter` fix already applied to "UI lint"/"UI typecheck" two steps above. Plain `&&` meant a
+      # failing @loopover/ui test silently prevented @loopover/ui-miner's and @loopover/miner-extension's
+      # tests from ever running in that invocation -- same class of failure-masking bug those two steps'
+      # own comment already describes, just still present here. `!cancelled()` on steps 2/3 (not `always()`)
+      # matches the pattern already used by "Save Turborepo cache"/"Save TypeScript incremental build
+      # cache" elsewhere in this file: still run after an earlier step's failure, just not after the job
+      # was cancelled outright. The job as a whole still fails if any of the three fails.
+      - name: UI tests (ui)
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
-        run: npm --workspace @loopover/ui run test && npm --workspace @loopover/ui-miner run test && npm --workspace @loopover/miner-extension run test
+        run: npm --workspace @loopover/ui run test
+      - name: UI tests (ui-miner)
+        if: ${{ !cancelled() && (github.event_name == 'push' || needs.changes.outputs.ui == 'true') }}
+        run: npm --workspace @loopover/ui-miner run test
+      - name: UI tests (miner-extension)
+        if: ${{ !cancelled() && (github.event_name == 'push' || needs.changes.outputs.ui == 'true') }}
+        run: npm --workspace @loopover/miner-extension run test
       # Same rationale and --filter union semantics as "UI lint"/"UI typecheck" above.
       - name: Extension lint
         if: ${{ github.event_name == 'push' || needs.changes.outputs.ui == 'true' }}
@@ -626,7 +689,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo/cache
-          key: turbo-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
+          key: turbo-code-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
       # Bundle-size regression tracking for the deployed marketing/product site (loopover-ui only --
       # loopover-miner-ui is a self-hosted operator dashboard with no build step in this job at all, see
       # "UI build" above). Fork-excluded (no secrets.CODECOV_TOKEN on a fork PR, same boundary as the
@@ -725,16 +788,24 @@ jobs:
           key: ${{ steps.node-modules-cache.outputs.cache-primary-key }}
       # Any backend test run needs the engine package's dist/ built first -- see the identical step's
       # comment in validate-code (#ci-engine-build-order) for why. Same accumulating .turbo/cache
-      # restore/save pattern as validate-code's identical pair, sharing the same key lineage -- whichever
-      # job (this shard or another, in this run or an earlier one) saved a warm cache first, the rest can
-      # reuse it. Correctness is turbo's own content-hashing, not this restore -- see validate-code's comment.
+      # restore/save pattern as validate-code's pair, but a DIFFERENT key prefix ("turbo-tests-" vs.
+      # validate-code's "turbo-code-"): these two jobs used to share one plain "turbo-" prefix, which meant
+      # all 7 jobs in a single run (validate-code plus these 6 shards) raced for the same cache slot, and
+      # actions/cache/save no-ops on a duplicate key within a run -- see the shard-vs-shard version of that
+      # same race below. Because a shard reaches its own Save after only ~6 steps versus validate-code's
+      # ~20+, a shard almost always won that race, meaning validate-code's much richer cache (engine + mcp +
+      # miner + ui-kit + ui + extension) was very likely discarded every run in favor of a shard's
+      # engine-only one. Splitting the prefixes gives each job's own lineage instead of racing; within THIS
+      # prefix, the 6 shards below still race each other for one slot, which is fine since they all save the
+      # exact same content (only @loopover/engine#build runs in this job) -- whichever shard wins, the
+      # content is equivalent, unlike the cross-job case this split just fixed.
       - name: Restore Turborepo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo/cache
-          key: turbo-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
+          key: turbo-tests-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
           restore-keys: |
-            turbo-${{ hashFiles('package-lock.json') }}-
+            turbo-tests-${{ hashFiles('package-lock.json') }}-
       - name: Build engine package
         run: npx turbo run build --filter=@loopover/engine
       - name: Save Turborepo cache
@@ -742,7 +813,7 @@ jobs:
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: .turbo/cache
-          key: turbo-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
+          key: turbo-tests-${{ hashFiles('package-lock.json') }}-${{ github.run_id }}
       - name: Prepare test reports dir
         run: mkdir -p reports/junit
       - name: Test with coverage (shard ${{ matrix.shard }}/6)
