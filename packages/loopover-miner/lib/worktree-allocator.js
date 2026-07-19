@@ -5,21 +5,10 @@ import { mkdirSync } from "node:fs";
 import { homedir, hostname } from "node:os";
 import { join } from "node:path";
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
-
-// Git-worktree-per-attempt allocator (#4297): durable local bookkeeping for which worktree paths are
-// allocated to which fleet attempts. Opens its handle through local-store.js's openLocalStoreDb (#4272), the
-// same call run-state.js / claim-ledger.js / portfolio-queue.js use — plain JS + node:sqlite, never phones
-// home. Going through openLocalStoreDb is what registers the handle for crash-safe cleanup
-// (process-lifecycle.js, #4826), which matters most for exactly this store: a SIGINT/SIGTERM mid-write is what
-// leaves a worktree slot leased to a process that no longer exists (#6600). It previously hand-rolled the
-// identical mkdirSync/chmodSync/PRAGMA sequence and so was never registered, despite this comment already
-// claiming to mirror those three files.
-
 const defaultDbFileName = "worktree-allocator.sqlite3";
 const defaultWorktreeDirName = "worktrees";
 const defaultMaxConcurrency = 2;
 let defaultWorktreeAllocator = null;
-
 // Age-based orphan reclaim (#7085). Fleet mode (see DEPLOYMENT.md) runs multiple separate CONTAINERS over one
 // shared data volume, each with its own PID namespace, so a stored `owner_pid` is meaningless the moment a
 // different container opens this store — `isProcessAlive` checks the CALLING process's own namespace, not the
@@ -30,98 +19,99 @@ let defaultWorktreeAllocator = null;
 // agent run + push), which can legitimately run for hours; the same-host `isProcessAlive` fast path still frees a
 // crashed local owner immediately, so this age fallback only ever governs the cross-container case.
 export const DEFAULT_MAX_LEASE_MS = 6 * 60 * 60 * 1000;
-
 export function resolveWorktreeAllocatorDbPath(env = process.env) {
-  return resolveLocalStoreDbPath(defaultDbFileName, "LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB", env);
+    return resolveLocalStoreDbPath(defaultDbFileName, "LOOPOVER_MINER_WORKTREE_ALLOCATOR_DB", env);
 }
-
 export function resolveWorktreeBaseDir(env = process.env) {
-  const explicitPath = typeof env.LOOPOVER_MINER_WORKTREE_DIR === "string"
-    ? env.LOOPOVER_MINER_WORKTREE_DIR.trim()
-    : "";
-  if (explicitPath) return explicitPath;
-
-  const explicitConfigDir = typeof env.LOOPOVER_MINER_CONFIG_DIR === "string"
-    ? env.LOOPOVER_MINER_CONFIG_DIR.trim()
-    : "";
-  if (explicitConfigDir) return join(explicitConfigDir, defaultWorktreeDirName);
-
-  const configHome = typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
-    ? env.XDG_CONFIG_HOME.trim()
-    : join(homedir(), ".config");
-  return join(configHome, "loopover-miner", defaultWorktreeDirName);
+    const explicitPath = typeof env.LOOPOVER_MINER_WORKTREE_DIR === "string"
+        ? env.LOOPOVER_MINER_WORKTREE_DIR.trim()
+        : "";
+    if (explicitPath)
+        return explicitPath;
+    const explicitConfigDir = typeof env.LOOPOVER_MINER_CONFIG_DIR === "string"
+        ? env.LOOPOVER_MINER_CONFIG_DIR.trim()
+        : "";
+    if (explicitConfigDir)
+        return join(explicitConfigDir, defaultWorktreeDirName);
+    const configHome = typeof env.XDG_CONFIG_HOME === "string" && env.XDG_CONFIG_HOME.trim()
+        ? env.XDG_CONFIG_HOME.trim()
+        : join(homedir(), ".config");
+    return join(configHome, "loopover-miner", defaultWorktreeDirName);
 }
-
 function normalizeDbPath(dbPath) {
-  return normalizeLocalStoreDbPath(dbPath, resolveWorktreeAllocatorDbPath(), "invalid_worktree_allocator_db_path");
+    return normalizeLocalStoreDbPath(dbPath, resolveWorktreeAllocatorDbPath(), "invalid_worktree_allocator_db_path");
 }
-
 function normalizeWorktreeBaseDir(worktreeBaseDir) {
-  const path = (worktreeBaseDir ?? resolveWorktreeBaseDir()).trim();
-  if (!path) throw new Error("invalid_worktree_base_dir");
-  return path;
+    const path = (worktreeBaseDir ?? resolveWorktreeBaseDir()).trim();
+    if (!path)
+        throw new Error("invalid_worktree_base_dir");
+    return path;
 }
-
 function normalizeMaxConcurrency(value) {
-  if (value === undefined || value === null) return defaultMaxConcurrency;
-  if (!Number.isInteger(value) || value < 1) throw new Error("invalid_max_concurrency");
-  return value;
+    if (value === undefined || value === null)
+        return defaultMaxConcurrency;
+    if (!Number.isInteger(value) || value < 1)
+        throw new Error("invalid_max_concurrency");
+    return value;
 }
-
 function normalizeMaxLeaseMs(value) {
-  if (value === undefined || value === null) return DEFAULT_MAX_LEASE_MS;
-  if (!Number.isFinite(value) || value < 0) throw new Error("invalid_max_lease_ms");
-  return value;
+    if (value === undefined || value === null)
+        return DEFAULT_MAX_LEASE_MS;
+    if (!Number.isFinite(value) || value < 0)
+        throw new Error("invalid_max_lease_ms");
+    return value;
 }
-
 function normalizeHostId(value) {
-  if (value === undefined || value === null) return hostname();
-  if (typeof value !== "string" || !value.trim()) throw new Error("invalid_host_id");
-  return value.trim();
+    if (value === undefined || value === null)
+        return hostname();
+    if (typeof value !== "string" || !value.trim())
+        throw new Error("invalid_host_id");
+    return value.trim();
 }
-
 function normalizeRepoFullName(repoFullName) {
-  if (typeof repoFullName !== "string") throw new Error("invalid_repo_full_name");
-  const [owner, repo, extra] = repoFullName.trim().split("/");
-  if (!owner || !repo || extra !== undefined) throw new Error("invalid_repo_full_name");
-  return `${owner}/${repo}`;
+    if (typeof repoFullName !== "string")
+        throw new Error("invalid_repo_full_name");
+    const [owner, repo, extra] = repoFullName.trim().split("/");
+    if (!owner || !repo || extra !== undefined)
+        throw new Error("invalid_repo_full_name");
+    return `${owner}/${repo}`;
 }
-
 function normalizeAttemptId(attemptId) {
-  if (typeof attemptId !== "string") throw new Error("invalid_attempt_id");
-  const trimmed = attemptId.trim();
-  if (!trimmed) throw new Error("invalid_attempt_id");
-  return trimmed;
+    if (typeof attemptId !== "string")
+        throw new Error("invalid_attempt_id");
+    const trimmed = attemptId.trim();
+    if (!trimmed)
+        throw new Error("invalid_attempt_id");
+    return trimmed;
 }
-
 export function isProcessAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // ESRCH = no such process; EPERM (or similar) means the process exists but we lack signal rights.
-    return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH"
-      ? false
-      : true;
-  }
+    if (!Number.isInteger(pid) || pid <= 0)
+        return false;
+    try {
+        process.kill(pid, 0);
+        return true;
+    }
+    catch (error) {
+        // ESRCH = no such process; EPERM (or similar) means the process exists but we lack signal rights.
+        return typeof error === "object" && error !== null && "code" in error && error.code === "ESRCH"
+            ? false
+            : true;
+    }
 }
-
 function rowToAllocation(row) {
-  return {
-    slotIndex: row.slot_index,
-    worktreePath: row.worktree_path,
-    attemptId: row.attempt_id,
-    repoFullName: row.repo_full_name,
-    status: row.status,
-    ownerPid: row.owner_pid,
-    ownerHost: row.owner_host ?? null,
-    allocatedAt: row.allocated_at,
-  };
+    return {
+        slotIndex: row.slot_index,
+        worktreePath: row.worktree_path,
+        attemptId: row.attempt_id,
+        repoFullName: row.repo_full_name,
+        status: row.status,
+        ownerPid: row.owner_pid,
+        ownerHost: row.owner_host ?? null,
+        allocatedAt: row.allocated_at,
+    };
 }
-
 function ensureSlotTable(db) {
-  db.exec(`
+    db.exec(`
     CREATE TABLE IF NOT EXISTS worktree_slots (
       slot_index INTEGER PRIMARY KEY,
       worktree_path TEXT NOT NULL UNIQUE,
@@ -133,40 +123,38 @@ function ensureSlotTable(db) {
       allocated_at TEXT
     )
   `);
-  ensureOwnerHostColumn(db);
+    ensureOwnerHostColumn(db);
 }
-
 // Add the owner_host column (#7085) to an on-disk file created before it existed. `CREATE TABLE IF NOT EXISTS`
 // above is a no-op against an already-existing table, so a pre-#7085 file needs this explicit ALTER — guarded by
 // a presence check (same technique as attempt-log.js's ensureOutcomeColumns). A migrated row keeps owner_host
 // NULL until its owner re-acquires, so the age-based reclaim (not the same-host pid fast path) governs it.
 function ensureOwnerHostColumn(db) {
-  const hasOwnerHost = db
-    .prepare("PRAGMA table_info(worktree_slots)")
-    .all()
-    .some((column) => column.name === "owner_host");
-  if (!hasOwnerHost) db.exec("ALTER TABLE worktree_slots ADD COLUMN owner_host TEXT");
+    const hasOwnerHost = db
+        .prepare("PRAGMA table_info(worktree_slots)")
+        .all()
+        .some((column) => column.name === "owner_host");
+    if (!hasOwnerHost)
+        db.exec("ALTER TABLE worktree_slots ADD COLUMN owner_host TEXT");
 }
-
 function ensureSlots(db, worktreeBaseDir, maxConcurrency) {
-  mkdirSync(worktreeBaseDir, { recursive: true, mode: 0o700 });
-  const insert = db.prepare(`
+    mkdirSync(worktreeBaseDir, { recursive: true, mode: 0o700 });
+    const insert = db.prepare(`
     INSERT OR IGNORE INTO worktree_slots (slot_index, worktree_path, status)
     VALUES (?, ?, 'free')
   `);
-  for (let slotIndex = 0; slotIndex < maxConcurrency; slotIndex += 1) {
-    const worktreePath = join(worktreeBaseDir, `slot-${slotIndex}`);
-    insert.run(slotIndex, worktreePath);
-    mkdirSync(worktreePath, { recursive: true, mode: 0o700 });
-  }
+    for (let slotIndex = 0; slotIndex < maxConcurrency; slotIndex += 1) {
+        const worktreePath = join(worktreeBaseDir, `slot-${slotIndex}`);
+        insert.run(slotIndex, worktreePath);
+        mkdirSync(worktreePath, { recursive: true, mode: 0o700 });
+    }
 }
-
 function allocationAgeMs(allocatedAt, nowMs) {
-  const allocatedMs = Date.parse(allocatedAt);
-  if (!Number.isFinite(allocatedMs)) return null;
-  return nowMs - allocatedMs;
+    const allocatedMs = Date.parse(allocatedAt);
+    if (!Number.isFinite(allocatedMs))
+        return null;
+    return nowMs - allocatedMs;
 }
-
 /**
  * Decide whether an `active` slot is orphaned and should be reclaimed. Two independent signals:
  * - Age (container-agnostic): a slot whose `allocated_at` is older than `maxLeaseMs` is reclaimed regardless of
@@ -178,145 +166,138 @@ function allocationAgeMs(allocatedAt, nowMs) {
  *   immediately without waiting out the lease. A foreign `owner_host` is never trusted for the pid check.
  */
 function isSlotOrphaned(row, nowMs, maxLeaseMs, hostId) {
-  const ageMs = allocationAgeMs(row.allocated_at, nowMs);
-  if (ageMs !== null && ageMs > maxLeaseMs) return true;
-  if (row.owner_host !== null && row.owner_host === hostId) {
-    return row.owner_pid === null || !isProcessAlive(row.owner_pid);
-  }
-  return false;
+    const ageMs = allocationAgeMs(row.allocated_at, nowMs);
+    if (ageMs !== null && ageMs > maxLeaseMs)
+        return true;
+    if (row.owner_host !== null && row.owner_host === hostId) {
+        return row.owner_pid === null || !isProcessAlive(row.owner_pid);
+    }
+    return false;
 }
-
 function reclaimOrphanedAllocations(db, nowMs, maxLeaseMs, hostId) {
-  const orphans = db
-    .prepare("SELECT slot_index, owner_pid, owner_host, allocated_at FROM worktree_slots WHERE status = 'active'")
-    .all();
-  const reclaim = db.prepare(`
+    const orphans = db
+        .prepare("SELECT slot_index, owner_pid, owner_host, allocated_at FROM worktree_slots WHERE status = 'active'")
+        .all();
+    const reclaim = db.prepare(`
     UPDATE worktree_slots
     SET status = 'free', attempt_id = NULL, repo_full_name = NULL, owner_pid = NULL, owner_host = NULL, allocated_at = NULL
     WHERE slot_index = ?
   `);
-  for (const row of orphans) {
-    if (isSlotOrphaned(row, nowMs, maxLeaseMs, hostId)) reclaim.run(row.slot_index);
-  }
+    for (const row of orphans) {
+        if (isSlotOrphaned(row, nowMs, maxLeaseMs, hostId))
+            reclaim.run(row.slot_index);
+    }
 }
-
 /**
  * Opens the local worktree allocator store. On startup reclaims orphaned active slots — any slot past its
  * `maxLeaseMs` age (the container-agnostic guarantee for fleet mode's shared store), plus, as a same-host fast
  * path, any slot whose owner pid is confirmed dead in THIS host's PID namespace.
  */
 export function openWorktreeAllocator(options = {}) {
-  const resolvedPath = normalizeDbPath(options.dbPath);
-  const worktreeBaseDir = normalizeWorktreeBaseDir(options.worktreeBaseDir);
-  const maxConcurrency = normalizeMaxConcurrency(options.maxConcurrency);
-  const maxLeaseMs = normalizeMaxLeaseMs(options.maxLeaseMs);
-  const hostId = normalizeHostId(options.hostId);
-  const processPid = Number.isInteger(options.processPid) ? options.processPid : process.pid;
-  const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
-
-  const db = openLocalStoreDb(resolvedPath);
-  ensureSlotTable(db);
-  ensureSlots(db, worktreeBaseDir, maxConcurrency);
-  reclaimOrphanedAllocations(db, nowMs, maxLeaseMs, hostId);
-
-  const getByAttempt = db.prepare(
-    "SELECT slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, owner_host, allocated_at FROM worktree_slots WHERE attempt_id = ?",
-  );
-  const countActive = db.prepare("SELECT COUNT(*) AS count FROM worktree_slots WHERE status = 'active'");
-  const selectFreeSlot = db.prepare(`
+    const resolvedPath = normalizeDbPath(options.dbPath);
+    const worktreeBaseDir = normalizeWorktreeBaseDir(options.worktreeBaseDir);
+    const maxConcurrency = normalizeMaxConcurrency(options.maxConcurrency);
+    const maxLeaseMs = normalizeMaxLeaseMs(options.maxLeaseMs);
+    const hostId = normalizeHostId(options.hostId);
+    const processPid = Number.isInteger(options.processPid) ? options.processPid : process.pid;
+    const nowMs = Number.isFinite(options.nowMs) ? options.nowMs : Date.now();
+    const db = openLocalStoreDb(resolvedPath);
+    ensureSlotTable(db);
+    ensureSlots(db, worktreeBaseDir, maxConcurrency);
+    reclaimOrphanedAllocations(db, nowMs, maxLeaseMs, hostId);
+    const getByAttempt = db.prepare("SELECT slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, owner_host, allocated_at FROM worktree_slots WHERE attempt_id = ?");
+    const countActive = db.prepare("SELECT COUNT(*) AS count FROM worktree_slots WHERE status = 'active'");
+    const selectFreeSlot = db.prepare(`
     SELECT slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, owner_host, allocated_at
     FROM worktree_slots
     WHERE status = 'free'
     ORDER BY slot_index
     LIMIT 1
   `);
-  const markActive = db.prepare(`
+    const markActive = db.prepare(`
     UPDATE worktree_slots
     SET status = 'active', attempt_id = ?, repo_full_name = ?, owner_pid = ?, owner_host = ?, allocated_at = ?
     WHERE slot_index = ?
   `);
-  const releaseByAttempt = db.prepare(`
+    const releaseByAttempt = db.prepare(`
     UPDATE worktree_slots
     SET status = 'free', attempt_id = NULL, repo_full_name = NULL, owner_pid = NULL, owner_host = NULL, allocated_at = NULL
     WHERE attempt_id = ? AND status = 'active'
     RETURNING slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, owner_host, allocated_at
   `);
-  const listSlots = db.prepare(
-    "SELECT slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, owner_host, allocated_at FROM worktree_slots ORDER BY slot_index",
-  );
-
-  const allocator = {
-    dbPath: resolvedPath,
-    worktreeBaseDir,
-    maxConcurrency,
-    maxLeaseMs,
-    processPid,
-    hostId,
-    acquire(attemptId, repoFullName) {
-      const normalizedAttempt = normalizeAttemptId(attemptId);
-      const normalizedRepo = normalizeRepoFullName(repoFullName);
-      const existing = getByAttempt.get(normalizedAttempt);
-      if (existing?.status === "active") return rowToAllocation(existing);
-
-      db.exec("BEGIN IMMEDIATE");
-      try {
-        const raced = getByAttempt.get(normalizedAttempt);
-        if (raced?.status === "active") {
-          db.exec("COMMIT");
-          return rowToAllocation(raced);
-        }
-        const activeCount = countActive.get().count;
-        if (activeCount >= maxConcurrency) throw new Error("worktree_capacity_exceeded");
-        const slot = selectFreeSlot.get();
-        if (!slot) throw new Error("worktree_capacity_exceeded");
-        const allocatedAt = new Date().toISOString();
-        markActive.run(normalizedAttempt, normalizedRepo, processPid, hostId, allocatedAt, slot.slot_index);
-        db.exec("COMMIT");
-        return rowToAllocation({
-          ...slot,
-          attempt_id: normalizedAttempt,
-          repo_full_name: normalizedRepo,
-          status: "active",
-          owner_pid: processPid,
-          owner_host: hostId,
-          allocated_at: allocatedAt,
-        });
-      } catch (error) {
-        db.exec("ROLLBACK");
-        throw error;
-      }
-    },
-    release(attemptId) {
-      const normalizedAttempt = normalizeAttemptId(attemptId);
-      const row = releaseByAttempt.get(normalizedAttempt);
-      return row ? rowToAllocation(row) : null;
-    },
-    listSlots() {
-      return listSlots.all().map(rowToAllocation);
-    },
-    close() {
-      db.close();
-    },
-  };
-
-  return allocator;
+    const listSlots = db.prepare("SELECT slot_index, worktree_path, attempt_id, repo_full_name, status, owner_pid, owner_host, allocated_at FROM worktree_slots ORDER BY slot_index");
+    const allocator = {
+        dbPath: resolvedPath,
+        worktreeBaseDir,
+        maxConcurrency,
+        maxLeaseMs,
+        processPid,
+        hostId,
+        acquire(attemptId, repoFullName) {
+            const normalizedAttempt = normalizeAttemptId(attemptId);
+            const normalizedRepo = normalizeRepoFullName(repoFullName);
+            const existing = getByAttempt.get(normalizedAttempt);
+            if (existing?.status === "active")
+                return rowToAllocation(existing);
+            db.exec("BEGIN IMMEDIATE");
+            try {
+                const raced = getByAttempt.get(normalizedAttempt);
+                if (raced?.status === "active") {
+                    db.exec("COMMIT");
+                    return rowToAllocation(raced);
+                }
+                const activeCount = countActive.get().count;
+                if (activeCount >= maxConcurrency)
+                    throw new Error("worktree_capacity_exceeded");
+                const slot = selectFreeSlot.get();
+                if (!slot)
+                    throw new Error("worktree_capacity_exceeded");
+                const allocatedAt = new Date().toISOString();
+                markActive.run(normalizedAttempt, normalizedRepo, processPid, hostId, allocatedAt, slot.slot_index);
+                db.exec("COMMIT");
+                return rowToAllocation({
+                    ...slot,
+                    attempt_id: normalizedAttempt,
+                    repo_full_name: normalizedRepo,
+                    status: "active",
+                    owner_pid: processPid,
+                    owner_host: hostId,
+                    allocated_at: allocatedAt,
+                });
+            }
+            catch (error) {
+                db.exec("ROLLBACK");
+                throw error;
+            }
+        },
+        release(attemptId) {
+            const normalizedAttempt = normalizeAttemptId(attemptId);
+            const row = releaseByAttempt.get(normalizedAttempt);
+            return row ? rowToAllocation(row) : null;
+        },
+        listSlots() {
+            return listSlots.all().map(rowToAllocation);
+        },
+        close() {
+            db.close();
+        },
+    };
+    return allocator;
 }
-
 function getDefaultWorktreeAllocator() {
-  defaultWorktreeAllocator ??= openWorktreeAllocator();
-  return defaultWorktreeAllocator;
+    defaultWorktreeAllocator ??= openWorktreeAllocator();
+    return defaultWorktreeAllocator;
 }
-
 export function acquireWorktree(attemptId, repoFullName) {
-  return getDefaultWorktreeAllocator().acquire(attemptId, repoFullName);
+    return getDefaultWorktreeAllocator().acquire(attemptId, repoFullName);
 }
-
 export function releaseWorktree(attemptId) {
-  return getDefaultWorktreeAllocator().release(attemptId);
+    return getDefaultWorktreeAllocator().release(attemptId);
 }
-
 export function closeDefaultWorktreeAllocator() {
-  if (!defaultWorktreeAllocator) return;
-  defaultWorktreeAllocator.close();
-  defaultWorktreeAllocator = null;
+    if (!defaultWorktreeAllocator)
+        return;
+    defaultWorktreeAllocator.close();
+    defaultWorktreeAllocator = null;
 }
+//# sourceMappingURL=data:application/json;base64,eyJ2ZXJzaW9uIjozLCJmaWxlIjoid29ya3RyZWUtYWxsb2NhdG9yLmpzIiwic291cmNlUm9vdCI6IiIsInNvdXJjZXMiOlsid29ya3RyZWUtYWxsb2NhdG9yLnRzIl0sIm5hbWVzIjpbXSwibWFwcGluZ3MiOiJBQUFBLCtHQUErRztBQUMvRyw4R0FBOEc7QUFDOUcsd0RBQXdEO0FBQ3hELE9BQU8sRUFBRSxTQUFTLEVBQUUsTUFBTSxTQUFTLENBQUM7QUFDcEMsT0FBTyxFQUFFLE9BQU8sRUFBRSxRQUFRLEVBQUUsTUFBTSxTQUFTLENBQUM7QUFDNUMsT0FBTyxFQUFFLElBQUksRUFBRSxNQUFNLFdBQVcsQ0FBQztBQUVqQyxPQUFPLEVBQUUseUJBQXlCLEVBQUUsZ0JBQWdCLEVBQUUsdUJBQXVCLEVBQUUsTUFBTSxrQkFBa0IsQ0FBQztBQTBEeEcsTUFBTSxpQkFBaUIsR0FBRyw0QkFBNEIsQ0FBQztBQUN2RCxNQUFNLHNCQUFzQixHQUFHLFdBQVcsQ0FBQztBQUMzQyxNQUFNLHFCQUFxQixHQUFHLENBQUMsQ0FBQztBQUNoQyxJQUFJLHdCQUF3QixHQUE2QixJQUFJLENBQUM7QUFFOUQsOEdBQThHO0FBQzlHLDJHQUEyRztBQUMzRyw4R0FBOEc7QUFDOUcsaUhBQWlIO0FBQ2pILGlIQUFpSDtBQUNqSCxzR0FBc0c7QUFDdEcsaUhBQWlIO0FBQ2pILGtIQUFrSDtBQUNsSCxvR0FBb0c7QUFDcEcsTUFBTSxDQUFDLE1BQU0sb0JBQW9CLEdBQUcsQ0FBQyxHQUFHLEVBQUUsR0FBRyxFQUFFLEdBQUcsSUFBSSxDQUFDO0FBRXZELE1BQU0sVUFBVSw4QkFBOEIsQ0FBQyxNQUEwQyxPQUFPLENBQUMsR0FBRztJQUNsRyxPQUFPLHVCQUF1QixDQUFDLGlCQUFpQixFQUFFLHNDQUFzQyxFQUFFLEdBQUcsQ0FBQyxDQUFDO0FBQ2pHLENBQUM7QUFFRCxNQUFNLFVBQVUsc0JBQXNCLENBQUMsTUFBMEMsT0FBTyxDQUFDLEdBQUc7SUFDMUYsTUFBTSxZQUFZLEdBQUcsT0FBTyxHQUFHLENBQUMsMkJBQTJCLEtB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
