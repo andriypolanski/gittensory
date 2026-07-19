@@ -60,6 +60,20 @@ function normalizeOptionalStringArray(value: unknown): string[] {
   return value.filter((entry) => typeof entry === "string" && entry.trim()).map((entry) => entry.trim());
 }
 
+// Best-effort per-row repoFullName: a malformed value degrades to null exactly like every other optional
+// field this record normalizes (normalizeOptionalStringArray drops bad entries; pullNumber/recordedAt fall
+// back to null), so one bad row can't throw out of normalizeBlockerHistory's loop and abort the whole batch
+// (#7248). The exported, strict normalizeRepoFullName keeps throwing for the callers that require a valid
+// repo (the miner store's write paths), so only this row-level normalization is made tolerant.
+function normalizeOptionalRepoFullName(value: unknown): string | null {
+  if (typeof value !== "string" || !value.trim()) return null;
+  try {
+    return normalizeRepoFullName(value);
+  } catch {
+    return null;
+  }
+}
+
 /** Validate one blocker-history row from the review stack (gate block/close audit). */
 export function normalizeBlockerHistoryRecord(record: unknown): BlockerHistoryRecord | null {
   if (!record || typeof record !== "object" || Array.isArray(record)) return null;
@@ -68,9 +82,7 @@ export function normalizeBlockerHistoryRecord(record: unknown): BlockerHistoryRe
   if (blockerCodes.length === 0) return null;
   const changedPaths = normalizeOptionalStringArray(source.changedPaths);
   const guardrailMatches = normalizeOptionalStringArray(source.guardrailMatches);
-  const repoFullName = typeof source.repoFullName === "string" && source.repoFullName.trim()
-    ? normalizeRepoFullName(source.repoFullName)
-    : null;
+  const repoFullName = normalizeOptionalRepoFullName(source.repoFullName);
   return {
     repoFullName,
     blockerCodes,

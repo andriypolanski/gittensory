@@ -99,6 +99,29 @@ describe("deny-hook engine extraction — synthesizer, via @loopover/engine alon
     expect(() => normalizeRepoFullName("a/b/c")).toThrow("invalid_repo_full_name");
   });
 
+  it("normalizeBlockerHistoryRecord degrades a malformed repoFullName to null per-row instead of throwing (#7248)", () => {
+    // A well-formed owner/repo is still normalized (surrounding whitespace trimmed).
+    expect(normalizeBlockerHistoryRecord({ repoFullName: " owner/repo ", blockerCodes: ["x"] })?.repoFullName).toBe(
+      "owner/repo",
+    );
+    // Every shape the strict normalizeRepoFullName THROWS on degrades to null here rather than aborting the row —
+    // consistent with the record's other fields, which all degrade gracefully instead of throwing.
+    for (const bad of ["no-slash", "owner/repo/extra", "/leading", "trailing/"]) {
+      expect(normalizeBlockerHistoryRecord({ repoFullName: bad, blockerCodes: ["x"] })?.repoFullName).toBeNull();
+    }
+    // Empty/whitespace never reaches the strict normalizer and also degrades to null.
+    expect(normalizeBlockerHistoryRecord({ repoFullName: "   ", blockerCodes: ["x"] })?.repoFullName).toBeNull();
+
+    // The batch normalizer keeps every valid row even when one row carries a malformed repoFullName: pre-#7248
+    // the throw from the "acme/two/three" row aborted normalizeBlockerHistory entirely, dropping the valid rows.
+    const normalized = normalizeBlockerHistory([
+      { repoFullName: "acme/one", blockerCodes: ["guardrail_hold"] },
+      { repoFullName: "acme/two/three", blockerCodes: ["guardrail_hold"] },
+      { repoFullName: "acme/three", blockerCodes: ["guardrail_hold"] },
+    ]);
+    expect(normalized.map((record) => record.repoFullName)).toEqual(["acme/one", null, "acme/three"]);
+  });
+
   it("canonicalizes and globs changed paths, rejecting traversal and non-strings", () => {
     expect(canonicalizeChangedPath("./Src/Foo.ts")).toBe("src/foo.ts");
     expect(canonicalizeChangedPath("a\\b\\C.TS")).toBe("a/b/c.ts");
