@@ -52,6 +52,16 @@ describe("extractSubmittedSourceUrls", () => {
     expect(urls).toHaveLength(0);
   });
 
+  it("drops a site-relative snake_case download_url the same way as downloadUrl (#7446)", () => {
+    // Before #7446, distributionSourceFields was camelCase-only, so download_url:/… stayed in the
+    // extracted set, was classified as canonical, and produced a spurious invalid_url hard failure.
+    expect(extractSubmittedSourceUrls(mdx({ download_url: "/downloads/skills/foo.zip" }))).toHaveLength(0);
+    expect(extractSubmittedSourceUrls(mdx({ package_url: "/packages/foo.tgz" }))).toHaveLength(0);
+    for (const field of ["download_url", "package_url"]) {
+      expect(AWESOME_CLAUDE_CONTENT_SPEC.distributionSourceFields.has(field)).toBe(true);
+    }
+  });
+
   it("reads snake_case source fields (e.g. the canonical source_url), matching urlFields (#7250)", () => {
     // Before #7250, sourceUrlFields listed only the camelCase names, so a legitimately-aliased snake_case field
     // was invisible to the source-evidence gate even though duplicates.ts (which reads urlFields) saw it.
@@ -815,6 +825,25 @@ describe("downgrade rules (hasVerifiableCanonicalSource / isDowngradableInconclu
     const primary = report.urls.find((u) => u.field === "sourceUrl");
     expect(primary?.blocking).toBe(true);
     expect(report.status).toBe("retryable");
+  });
+
+  it("does NOT downgrade a snake_case PRIMARY-field retryable either (#7446)", async () => {
+    // Before #7446, primaryCanonicalSourceFields was camelCase-only, so a retryable source_url was
+    // treated as non-primary and silently downgraded whenever another canonical was reachable.
+    const src = mdx({
+      githubUrl: "https://github.com/acme/anchor",
+      source_url: "https://flaky.example/primary-snake",
+    });
+    const report = await checkSubmittedSourceEvidence(
+      src,
+      fakeFetch({ "https://github.com/acme/anchor": 200, "https://flaky.example/primary-snake": 503 }),
+    );
+    const primary = report.urls.find((u) => u.field === "source_url");
+    expect(primary?.blocking).toBe(true);
+    expect(report.status).toBe("retryable");
+    for (const field of ["github_url", "repo_url", "repository_url", "source_url"]) {
+      expect(AWESOME_CLAUDE_CONTENT_SPEC.primaryCanonicalSourceFields.has(field)).toBe(true);
+    }
   });
 });
 

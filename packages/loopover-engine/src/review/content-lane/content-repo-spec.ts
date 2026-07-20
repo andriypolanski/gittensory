@@ -143,7 +143,10 @@ export const AWESOME_CLAUDE_CONTENT_SPEC: ContentRepoSpec = {
     "website_url",
   ],
   sourceUrlListFields: new Set(["sourceUrls", "retrievalSources"]),
-  distributionSourceFields: new Set(["downloadUrl", "packageUrl"]),
+  // snake_case aliases match urlFields / sourceUrlFields (#7446): without them, a site-relative
+  // `download_url`/`package_url` is misclassified as canonical (spurious invalid_url), and a
+  // retryable `github_url`/`repo_url`/`repository_url`/`source_url` is silently downgradable.
+  distributionSourceFields: new Set(["downloadUrl", "packageUrl", "download_url", "package_url"]),
   distributionSourceHosts: new Set([
     "crates.io",
     "files.pythonhosted.org",
@@ -160,5 +163,14 @@ export const AWESOME_CLAUDE_CONTENT_SPEC: ContentRepoSpec = {
     "rubygems.org",
     "www.npmjs.com",
   ]),
-  primaryCanonicalSourceFields: new Set(["githubUrl", "repoUrl", "repositoryUrl", "sourceUrl"]),
+  primaryCanonicalSourceFields: new Set([
+    "githubUrl",
+    "repoUrl",
+    "repositoryUrl",
+    "sourceUrl",
+    "github_url",
+    "repo_url",
+    "repository_url",
+    "source_url",
+  ]),
 };
