@@ -78,7 +78,7 @@ test("POST /v1/tenants creates a tenant, returns only the safe {tenant,product,s
   assert.deepEqual(payload, { tenant: { name: "acme" }, product: "orb", state: "active" });
   assert.equal("database" in payload, false);
   // The registry was actually updated, not just the HTTP response shaped correctly.
-  assert.equal((await registry.get("acme"))?.state, "active");
+  assert.equal((await registry.get("acme", "orb"))?.state, "active");
 });
 
 test("POST /v1/tenants never echoes a tenant's database connection details on the wire", async () => {
@@ -152,7 +152,32 @@ test("POST /v1/tenants allows recreating a torn-down tenant", async () => {
   );
 
   assert.equal(res.status, 201);
-  assert.equal((await registry.get("acme"))?.state, "active");
+  assert.equal((await registry.get("acme", "orb"))?.state, "active");
+});
+
+test("POST /v1/tenants allows the same name under a different product (#8024)", async () => {
+  const registry = createFakeTenantRegistry();
+  const driver = createFakeTenantProvisioningDriver();
+  const app = createTenantHttpApp(baseDeps({ registry, driver }));
+
+  const orb = await app.request(
+    "/v1/tenants",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "acme", product: "orb" }) }),
+  );
+  const ams = await app.request(
+    "/v1/tenants",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "acme", product: "ams" }) }),
+  );
+
+  assert.equal(orb.status, 201);
+  assert.equal(ams.status, 201);
+  assert.equal((await registry.get("acme", "orb"))?.state, "active");
+  assert.equal((await registry.get("acme", "ams"))?.state, "active");
+
+  const deleted = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
+  assert.equal(deleted.status, 200);
+  assert.equal((await registry.get("acme", "orb"))?.state, "torn down");
+  assert.equal((await registry.get("acme", "ams"))?.state, "active");
 });
 
 test("GET /v1/tenants lists every registered tenant, sorted, with timestamps", async () => {
@@ -187,18 +212,29 @@ test("DELETE /v1/tenants/:name tears down a known tenant and reports it torn dow
   await driver.createContainer({ tenant: { name: "acme" }, product: "orb" });
   const app = createTenantHttpApp(baseDeps({ registry, driver }));
 
-  const res = await app.request("/v1/tenants/acme", authed({ method: "DELETE" }));
+  const res = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
 
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { tenant: { name: "acme" }, product: "orb", state: "torn down" });
-  assert.equal((await registry.get("acme"))?.state, "torn down");
+  assert.equal((await registry.get("acme", "orb"))?.state, "torn down");
   assert.equal(await driver.containerExists({ tenant: { name: "acme" }, product: "orb" }), false);
+});
+
+test("DELETE /v1/tenants/:name rejects a missing product query parameter (400)", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await app.request("/v1/tenants/acme", authed({ method: "DELETE" }));
+
+  assert.equal(res.status, 400);
+  assert.equal((await res.json() as { error: string }).error, "invalid_request");
 });
 
 test("DELETE /v1/tenants/:name on an unknown tenant is a 404, not a silent no-op", async () => {
   const app = createTenantHttpApp(baseDeps());
 
-  const res = await app.request("/v1/tenants/ghost", authed({ method: "DELETE" }));
+  const res = await app.request("/v1/tenants/ghost?product=orb", authed({ method: "DELETE" }));
 
   assert.equal(res.status, 404);
   assert.deepEqual(await res.json(), { error: "tenant_not_found" });
@@ -209,7 +245,7 @@ test("DELETE /v1/tenants/:name URL-decodes the name path segment", async () => {
   await registry.upsert({ tenant: { name: "acme corp" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
   const app = createTenantHttpApp(baseDeps({ registry }));
 
-  const res = await app.request(`/v1/tenants/${encodeURIComponent("acme corp")}`, authed({ method: "DELETE" }));
+  const res = await app.request(`/v1/tenants/${encodeURIComponent("acme corp")}?product=orb`, authed({ method: "DELETE" }));
 
   assert.equal(res.status, 200);
 });
@@ -223,7 +259,7 @@ test("create and delete both work when pagerDuty options are omitted entirely (d
   );
   assert.equal(created.status, 201);
 
-  const deleted = await app.request("/v1/tenants/acme", authed({ method: "DELETE" }));
+  const deleted = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
   assert.equal(deleted.status, 200);
 });
 

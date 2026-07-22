@@ -16,12 +16,27 @@ export type TenantRegistryRecord = {
 
 export interface TenantRegistry {
   /** Insert or update a tenant's record. Preserves the original `createdAt` on an update (looked up by the
-   *  caller, not this method -- see `http-app.ts`'s own upsert helper). */
+   *  caller, not this method -- see `http-app.ts`'s own upsert helper). Keyed by `(product, name)` so ORB and
+   *  AMS tenants that share a name stay independent (#8024). */
   upsert(record: TenantRegistryRecord): Promise<void>;
-  get(name: string): Promise<TenantRegistryRecord | undefined>;
+  /** Lookup by the same `${product}:${name}` composite as container-driver.ts's `instanceNameFor` (#8024). */
+  get(name: string, product: Product): Promise<TenantRegistryRecord | undefined>;
   /** Every tenant this service has ever created, including torn-down ones (mirrors a cloud console showing
-   *  terminated instances rather than making them vanish) -- ordered by `tenant.name` for a stable listing. */
+   *  terminated instances rather than making them vanish) -- ordered by `tenant.name` then `product` for a
+   *  stable listing across products. */
   list(): Promise<TenantRegistryRecord[]>;
+}
+
+/** Same composite key as container-driver.ts's `instanceNameFor` (#8024) — ORB and AMS tenants that share a
+ *  name must not collide in the admin inventory. */
+function instanceKeyFor(name: string, product: Product): string {
+  return `${product}:${name}`;
+}
+
+function sortRecords(records: TenantRegistryRecord[]): TenantRegistryRecord[] {
+  return records.sort(
+    (a, b) => a.tenant.name.localeCompare(b.tenant.name) || a.product.localeCompare(b.product),
+  );
 }
 
 /** In-memory fake for tests -- mirrors `createFakeTenantProvisioningDriver`'s own minimal-fake convention. */
@@ -29,13 +44,13 @@ export function createFakeTenantRegistry(): TenantRegistry {
   const records = new Map<string, TenantRegistryRecord>();
   return {
     async upsert(record) {
-      records.set(record.tenant.name, record);
+      records.set(instanceKeyFor(record.tenant.name, record.product), record);
     },
-    async get(name) {
-      return records.get(name);
+    async get(name, product) {
+      return records.get(instanceKeyFor(name, product));
     },
     async list() {
-      return [...records.values()].sort((a, b) => a.tenant.name.localeCompare(b.tenant.name));
+      return sortRecords([...records.values()]);
     },
   };
 }
@@ -51,19 +66,20 @@ export type KvNamespaceLike = {
 
 const KEY_PREFIX = "tenant:";
 
-function keyFor(name: string): string {
-  return `${KEY_PREFIX}${name}`;
+function keyFor(name: string, product: Product): string {
+  return `${KEY_PREFIX}${instanceKeyFor(name, product)}`;
 }
 
 /** Real registry backed by Workers KV. `list()` pages through every `tenant:`-prefixed key (KV's own `list()`
- *  caps each call at 1000 keys) rather than assuming a single page covers the whole registry. */
+ *  caps each call at 1000 keys) rather than assuming a single page covers the whole registry. Keys are
+ *  `tenant:${product}:${name}` (#8024). */
 export function createKvTenantRegistry(kv: KvNamespaceLike): TenantRegistry {
   return {
     async upsert(record) {
-      await kv.put(keyFor(record.tenant.name), JSON.stringify(record));
+      await kv.put(keyFor(record.tenant.name, record.product), JSON.stringify(record));
     },
-    async get(name) {
-      const raw = await kv.get(keyFor(name));
+    async get(name, product) {
+      const raw = await kv.get(keyFor(name, product));
       return raw ? (JSON.parse(raw) as TenantRegistryRecord) : undefined;
     },
     async list() {
@@ -78,7 +94,7 @@ export function createKvTenantRegistry(kv: KvNamespaceLike): TenantRegistry {
         if (page.list_complete || !page.cursor) break;
         cursor = page.cursor;
       }
-      return records.sort((a, b) => a.tenant.name.localeCompare(b.tenant.name));
+      return sortRecords(records);
     },
   };
 }
