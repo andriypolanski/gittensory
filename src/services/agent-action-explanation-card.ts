@@ -8,7 +8,7 @@ type AgentActionExplanationInput = Pick<
 
 const BLOCKER_CATEGORY_ORDER: AgentActionBlockerCategory[] = ["branch", "account", "queue", "scoreability", "risk", "maintainer", "unknown"];
 const PUBLIC_FORBIDDEN_PATTERN =
-  /\b(wallets?|hotkeys?|coldkeys?|seed phrases?|mnemonics?|raw[-_\s]?trust scores?|trust scores?|private reviewability|reviewability internals?|private scoreability|scoreability|projected scores?|score(?:d|s|ability)?|public score estimates?|estimated scores?|score estimates?|score previews?|reward estimates?|payouts?|farming|reward optimization|private rankings?)\b/gi;
+  /\b(wallets?|hotkeys?|coldkeys?|seed phrases?|mnemonics?|private keys?|raw[-_\s]?trust scores?|trust scores?|private reviewability|reviewability internals?|private scoreability|scoreability|projected scores?|score(?:d|s|ability)?|public score estimates?|estimated scores?|score estimates?|score previews?|reward estimates?|payouts?|farming|reward optimization|private rankings?)\b/gi;
 const PUBLIC_SCORE_DELTA_PATTERN = /\b(?:projected\s+)?score\w*(?:\s+\w+){0,4}\s+[-+]?\d+(?:\.\d+)?\s*->\s*[-+]?\d+(?:\.\d+)?\b/gi;
 // Token alternatives stay local; the local-path alternatives compose from the canonical PUBLIC_LOCAL_PATH_INLINE
 // in redaction.ts (adds the previously-missed /root/ and /var/, plus the forward-slash Windows form C:/Users/).
