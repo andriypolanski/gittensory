@@ -99,9 +99,10 @@ describe("reward-risk freshness parity with loopover-engine", () => {
     const staleIssues = [issue(collab.fullName, 2, "Stale", { updatedAt: "2020-01-01T00:00:00.000Z" })];
     const undatedIssues = [issue(collab.fullName, 3, "Undated", { updatedAt: null, createdAt: null })];
 
-    const fresh = buildRepoRewardRisk({ ...base, issues: freshIssues, pullRequests: [] });
-    const stale = buildRepoRewardRisk({ ...base, issues: staleIssues, pullRequests: [] });
-    const undated = buildRepoRewardRisk({ ...base, issues: undatedIssues, pullRequests: [] });
+    // Inject the same clock both sides read (#8011) -- exact equality, not wall-clock-proximity equality.
+    const fresh = buildRepoRewardRisk({ ...base, issues: freshIssues, pullRequests: [], nowMs });
+    const stale = buildRepoRewardRisk({ ...base, issues: staleIssues, pullRequests: [], nowMs });
+    const undated = buildRepoRewardRisk({ ...base, issues: undatedIssues, pullRequests: [], nowMs });
 
     expect(fresh.rewardUpside.opportunityFactors.freshnessFactor).toBe(
       computeOpportunityFreshness(toFreshnessIssues(freshIssues), nowMs),
@@ -135,47 +136,23 @@ describe("reward-risk freshness parity with loopover-engine", () => {
     expect(result.rewardUpside.opportunityFactors.freshnessFactor).toBeGreaterThan(0.7);
   });
 
-  it("pickIssueTimestamp and issueAgeDays cover defensive timestamp branches", () => {
-    const { pickIssueTimestamp, issueAgeDays } = rewardRiskFreshnessInternals;
-    expect(
-      pickIssueTimestamp({
-        repoFullName: collab.fullName,
-        number: 1,
-        title: "t",
-        state: "open",
-        labels: [],
-        linkedPrs: [],
-        updatedAt: "2026-07-03T00:00:00.000Z",
-        createdAt: "2020-01-01T00:00:00.000Z",
-      }),
-    ).toBe("2026-07-03T00:00:00.000Z");
-    expect(
-      pickIssueTimestamp({
-        repoFullName: collab.fullName,
-        number: 2,
-        title: "t",
-        state: "open",
-        labels: [],
-        linkedPrs: [],
-        updatedAt: "   ",
-        createdAt: "2026-07-03T00:00:00.000Z",
-      }),
-    ).toBe("2026-07-03T00:00:00.000Z");
-    expect(
-      pickIssueTimestamp({
-        repoFullName: collab.fullName,
-        number: 3,
-        title: "t",
-        state: "open",
-        labels: [],
-        linkedPrs: [],
-        updatedAt: null,
-        createdAt: null,
-      }),
-    ).toBeNull();
-    expect(issueAgeDays(null)).toBe(Number.POSITIVE_INFINITY);
-    expect(issueAgeDays("not-a-date")).toBe(Number.POSITIVE_INFINITY);
-    expect(issueAgeDays("2026-07-03T00:00:00.000Z")).toBeGreaterThanOrEqual(0);
+  it("is deterministic under an injected clock: same issues + same nowMs always yield the same factor (#8011)", () => {
+    // A fixed epoch, no Date.now() anywhere: the factor must be a pure function of (issues, nowMs). The
+    // pre-#8011 hand-duplicated issueAgeDays read the live clock, so this exact assertion was impossible.
+    const fixedNowMs = Date.parse("2026-07-10T00:00:00.000Z");
+    const fixedIssues = [
+      issue(collab.fullName, 1, "Fixed", { updatedAt: "2026-07-08T00:00:00.000Z", createdAt: "2026-07-01T00:00:00.000Z" }),
+    ];
+
+    const first = buildRepoRewardRisk({ ...base, issues: fixedIssues, pullRequests: [], nowMs: fixedNowMs });
+    const second = buildRepoRewardRisk({ ...base, issues: fixedIssues, pullRequests: [], nowMs: fixedNowMs });
+
+    expect(first.rewardUpside.opportunityFactors.freshnessFactor).toBe(second.rewardUpside.opportunityFactors.freshnessFactor);
+    expect(first.rewardUpside.opportunityFactors.freshnessFactor).toBe(
+      computeOpportunityFreshness(toFreshnessIssues(fixedIssues), fixedNowMs),
+    );
+    // 2 days old -> round4(exp(-2/20)) -- a concrete pin so a formula drift can't slip through as "still equal".
+    expect(first.rewardUpside.opportunityFactors.freshnessFactor).toBe(0.9048);
   });
 });
 

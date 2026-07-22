@@ -9,6 +9,7 @@
 import type { ScorePreviewResult } from "./scoring/preview.js";
 import { buildScorePreview } from "./scoring/preview.js";
 import { computeOpportunityCompetition } from "./opportunity-competition.js";
+import { computeOpportunityFreshness } from "./opportunity-freshness.js";
 import { isSuspiciousConfiguredLabel } from "./scoring/label-match.js";
 import { isFailingCheckSummary } from "./signals/check-summary.js";
 import { nowIso } from "./utils/json.js";
@@ -257,6 +258,9 @@ export function buildRepoRewardRisk(args: {
   /** Repo primary language (from sync metadata / ContributorFit.languageFit),
    *  used for the personalFit language-match bonus. */
   repoLanguage?: string | null | undefined;
+  /** Injected clock for the freshness factor (#8011); defaults to Date.now() at this call boundary only --
+   *  the pure calculators below never read the real clock themselves. */
+  nowMs?: number | undefined;
 }, deps: RewardRiskEngineDeps): RepoRewardRisk {
   const roleContext = deps.buildRoleContext({
     login: args.login,
@@ -282,7 +286,7 @@ export function buildRepoRewardRisk(args: {
 
   const labels = bestFitLabels(args.repo);
   const competitionFactor = opportunityCompetitionFactor(collisions.summary.highRiskCount, queueHealth.signals.openPullRequests);
-  const freshnessFactor = opportunityFreshnessFactor(args.issues);
+  const freshnessFactor = opportunityFreshnessFactor(args.issues, args.nowMs ?? Date.now());
   const currentOpenPrCount = nonNegative(args.outcomeHistory.totals.openPullRequests);
   const currentOpenIssueCount = nonNegative(repoOutcome?.openIssues ?? args.outcomeHistory.totals.openIssues);
   /* v8 ignore next -- Credibility fallback order protects sparse private snapshots; behavior is covered through scoring profile tests. */
@@ -427,6 +431,9 @@ export function buildContributorRewardRiskStrategy(args: {
   allIssues: IssueRecord[];
   allPullRequests: PullRequestRecord[];
   recentMergedPullRequests?: RecentMergedPullRequestRecord[] | undefined;
+  /** Injected clock threaded through to every per-repo freshness factor (#8011); optional, resolved at
+   *  buildRepoRewardRisk's own boundary when absent. */
+  nowMs?: number | undefined;
 }, deps: RewardRiskEngineDeps): ContributorRewardRiskStrategy {
   const registeredRepoNames = new Map(args.repositories.filter((repo) => repo.isRegistered).map((repo) => [repo.fullName.toLowerCase(), repo.fullName]));
   const candidateRepoNames = uniqueRegisteredRepoNames(
@@ -457,6 +464,7 @@ export function buildContributorRewardRiskStrategy(args: {
         pullRequests: pullRequestsByRepo.get(repoKey) ?? [],
         recentMergedPullRequests: recentMergedPullRequestsByRepo.get(repoKey) ?? [],
         repoLanguage: args.fit.languageFit.find((entry) => sameRepo(entry.repoFullName, repoFullName))?.language ?? null,
+        nowMs: args.nowMs,
       }, deps);
     })
     /* v8 ignore next -- Locale tie ordering is deterministic presentation fallback after ranked analysis scores. */
@@ -908,38 +916,16 @@ function opportunityCompetitionFactor(highRiskDuplicateClusters: number, openPul
   return computeOpportunityCompetition(highRiskDuplicateClusters, openPullRequests);
 }
 
-function opportunityFreshnessFactor(issues: IssueRecord[]): number {
-  const openIssues = issues.filter((issue) => issue.state === "open");
-  if (openIssues.length === 0) return 0;
-  let mostRecentAgeDays = Number.POSITIVE_INFINITY;
-  for (const issue of openIssues) {
-    const ageDays = issueAgeDays(pickIssueTimestamp(issue));
-    if (ageDays < mostRecentAgeDays) mostRecentAgeDays = ageDays;
-  }
-  // Freshness decays exponentially: ~1.0 at 0 days, ~0.6 at 7 days, ~0.2 at 30 days, ~0.05 at 90 days.
-  return round(clamp(Math.exp(-mostRecentAgeDays / 20), 0.05, 1));
-}
-
-function isParseableIssueTimestamp(value: string): boolean {
-  return Number.isFinite(Date.parse(value));
-}
-
-function pickIssueTimestamp(issue: IssueRecord): string | null {
-  const updated = typeof issue.updatedAt === "string" ? issue.updatedAt.trim() : "";
-  if (updated && isParseableIssueTimestamp(updated)) return updated;
-
-  const created = typeof issue.createdAt === "string" ? issue.createdAt.trim() : "";
-  if (created && isParseableIssueTimestamp(created)) return created;
-
-  return null;
-}
-
-/** Unknown/unparseable timestamps floor freshness (parity with loopover-engine opportunity-freshness.ts). */
-function issueAgeDays(value: string | null): number {
-  if (!value) return Number.POSITIVE_INFINITY;
-  const parsed = Date.parse(value);
-  if (!Number.isFinite(parsed)) return Number.POSITIVE_INFINITY;
-  return Math.floor((Date.now() - parsed) / 86_400_000);
+function opportunityFreshnessFactor(issues: IssueRecord[], nowMs: number): number {
+  // Delegates to the pure mirror rather than repeating its arithmetic (#8011) -- the same treatment #7529
+  // gave opportunityCompetitionFactor above. The hand-duplicated copy this replaced reimplemented
+  // pickIssueTimestamp/issueAgeDays/isParseableIssueTimestamp with a bare Date.now() inside issueAgeDays,
+  // so this path was neither deterministic nor guarded against drifting from the mirror's formula (the
+  // exact drift #7529 had to fix for its sibling). `computeOpportunityFreshness` is arithmetically
+  // identical for finite inputs -- same timestamp pick order, same floor-to-days, same
+  // round4/clamp(exp(-age/20), 0.05, 1) -- with the clock injected; Date.now() now lives only at
+  // buildRepoRewardRisk's call boundary.
+  return computeOpportunityFreshness(issues, nowMs);
 }
 
 function sameRepo(left: string, right: string): boolean {
@@ -990,8 +976,8 @@ function clamp(value: number, min: number, max: number): number {
 
 /* v8 ignore start -- Test-only export surface for branch coverage. */
 export const rewardRiskFreshnessInternals = {
-  pickIssueTimestamp,
-  issueAgeDays,
+  // pickIssueTimestamp/issueAgeDays left this surface with #8011: the freshness path now delegates to
+  // opportunity-freshness.ts, whose own opportunityFreshnessInternals expose the surviving copies.
   bestFitLabels,
 };
 
