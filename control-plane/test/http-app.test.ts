@@ -78,7 +78,7 @@ test("POST /v1/tenants creates a tenant, returns only the safe {tenant,product,s
   assert.deepEqual(payload, { tenant: { name: "acme" }, product: "orb", state: "active" });
   assert.equal("database" in payload, false);
   // The registry was actually updated, not just the HTTP response shaped correctly.
-  assert.equal((await registry.get("acme"))?.state, "active");
+  assert.equal((await registry.get("acme", "orb"))?.state, "active");
 });
 
 test("POST /v1/tenants never echoes a tenant's database connection details on the wire", async () => {
@@ -152,7 +152,32 @@ test("POST /v1/tenants allows recreating a torn-down tenant", async () => {
   );
 
   assert.equal(res.status, 201);
-  assert.equal((await registry.get("acme"))?.state, "active");
+  assert.equal((await registry.get("acme", "orb"))?.state, "active");
+});
+
+test("POST /v1/tenants allows the same name under a different product (#8024)", async () => {
+  const registry = createFakeTenantRegistry();
+  const driver = createFakeTenantProvisioningDriver();
+  const app = createTenantHttpApp(baseDeps({ registry, driver }));
+
+  const orb = await app.request(
+    "/v1/tenants",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "acme", product: "orb" }) }),
+  );
+  const ams = await app.request(
+    "/v1/tenants",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ name: "acme", product: "ams" }) }),
+  );
+
+  assert.equal(orb.status, 201);
+  assert.equal(ams.status, 201);
+  assert.equal((await registry.get("acme", "orb"))?.state, "active");
+  assert.equal((await registry.get("acme", "ams"))?.state, "active");
+
+  const deleted = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
+  assert.equal(deleted.status, 200);
+  assert.equal((await registry.get("acme", "orb"))?.state, "torn down");
+  assert.equal((await registry.get("acme", "ams"))?.state, "active");
 });
 
 test("GET /v1/tenants lists every registered tenant, sorted, with timestamps", async () => {
@@ -187,18 +212,29 @@ test("DELETE /v1/tenants/:name tears down a known tenant and reports it torn dow
   await driver.createContainer({ tenant: { name: "acme" }, product: "orb" });
   const app = createTenantHttpApp(baseDeps({ registry, driver }));
 
-  const res = await app.request("/v1/tenants/acme", authed({ method: "DELETE" }));
+  const res = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
 
   assert.equal(res.status, 200);
   assert.deepEqual(await res.json(), { tenant: { name: "acme" }, product: "orb", state: "torn down" });
-  assert.equal((await registry.get("acme"))?.state, "torn down");
+  assert.equal((await registry.get("acme", "orb"))?.state, "torn down");
   assert.equal(await driver.containerExists({ tenant: { name: "acme" }, product: "orb" }), false);
+});
+
+test("DELETE /v1/tenants/:name rejects a missing product query parameter (400)", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await app.request("/v1/tenants/acme", authed({ method: "DELETE" }));
+
+  assert.equal(res.status, 400);
+  assert.equal((await res.json() as { error: string }).error, "invalid_request");
 });
 
 test("DELETE /v1/tenants/:name on an unknown tenant is a 404, not a silent no-op", async () => {
   const app = createTenantHttpApp(baseDeps());
 
-  const res = await app.request("/v1/tenants/ghost", authed({ method: "DELETE" }));
+  const res = await app.request("/v1/tenants/ghost?product=orb", authed({ method: "DELETE" }));
 
   assert.equal(res.status, 404);
   assert.deepEqual(await res.json(), { error: "tenant_not_found" });
@@ -209,7 +245,7 @@ test("DELETE /v1/tenants/:name URL-decodes the name path segment", async () => {
   await registry.upsert({ tenant: { name: "acme corp" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
   const app = createTenantHttpApp(baseDeps({ registry }));
 
-  const res = await app.request(`/v1/tenants/${encodeURIComponent("acme corp")}`, authed({ method: "DELETE" }));
+  const res = await app.request(`/v1/tenants/${encodeURIComponent("acme corp")}?product=orb`, authed({ method: "DELETE" }));
 
   assert.equal(res.status, 200);
 });
@@ -223,7 +259,7 @@ test("create and delete both work when pagerDuty options are omitted entirely (d
   );
   assert.equal(created.status, 201);
 
-  const deleted = await app.request("/v1/tenants/acme", authed({ method: "DELETE" }));
+  const deleted = await app.request("/v1/tenants/acme?product=orb", authed({ method: "DELETE" }));
   assert.equal(deleted.status, 200);
 });
 
@@ -254,4 +290,143 @@ test("a driver failure surfaces as a logged 500 via onError, not an unhandled re
   assert.equal(errors.length, 1);
   assert.match(errors[0]!, /control_plane_http_error/);
   assert.match(errors[0]!, /cloudflare containers api unavailable/);
+});
+
+// #4898: POST /v1/tenants/rollout — pin/unpin an explicit list of tenants' pinnedVersion, all-or-nothing.
+// The registry-seeding style mirrors the GET /v1/tenants tests above (records seeded directly, no driver run).
+
+function rollout(app: ReturnType<typeof createTenantHttpApp>, body: unknown) {
+  return app.request(
+    "/v1/tenants/rollout",
+    authed({ method: "POST", headers: { "content-type": "application/json" }, body: typeof body === "string" ? body : JSON.stringify(body) }),
+  );
+}
+
+test("POST /v1/tenants/rollout pins exactly the listed tenants and leaves every other tenant untouched (#4898 acceptance)", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  await registry.upsert({ tenant: { name: "beta" }, product: "ams", state: "active", createdAt: "t0", updatedAt: "t0" });
+  await registry.upsert({ tenant: { name: "gamma" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await rollout(app, { names: ["acme", "gamma"], pinnedVersion: "v1.4.2" });
+
+  assert.equal(res.status, 200);
+  const payload = (await res.json()) as { tenants: Array<{ tenant: { name: string; pinnedVersion?: string | null } }> };
+  assert.deepEqual(payload.tenants.map((t) => t.tenant), [
+    { name: "acme", pinnedVersion: "v1.4.2" },
+    { name: "gamma", pinnedVersion: "v1.4.2" },
+  ]);
+  // The unlisted tenant is completely unaffected — no pin, no updatedAt churn.
+  const beta = await registry.get("beta");
+  assert.deepEqual(beta?.tenant, { name: "beta" });
+  assert.equal(beta?.updatedAt, "t0");
+  // The pinned tenants' records persisted the pin and kept their createdAt.
+  const acme = await registry.get("acme");
+  assert.deepEqual(acme?.tenant, { name: "acme", pinnedVersion: "v1.4.2" });
+  assert.equal(acme?.createdAt, "t0");
+  assert.notEqual(acme?.updatedAt, "t0");
+});
+
+test("POST /v1/tenants/rollout rolls back independently: re-pinning one tenant leaves another tenant's pin alone", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme", pinnedVersion: "v2.0.0" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  await registry.upsert({ tenant: { name: "beta", pinnedVersion: "v2.0.0" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const back = await rollout(app, { names: ["acme"], pinnedVersion: "v1.9.0" });
+  assert.equal(back.status, 200);
+  assert.deepEqual((await registry.get("acme"))?.tenant, { name: "acme", pinnedVersion: "v1.9.0" });
+  assert.deepEqual((await registry.get("beta"))?.tenant, { name: "beta", pinnedVersion: "v2.0.0" });
+
+  // Explicit unpin (null) reverts the tenant to its release channel's default.
+  const unpin = await rollout(app, { names: ["acme"], pinnedVersion: null });
+  assert.equal(unpin.status, 200);
+  assert.deepEqual((await registry.get("acme"))?.tenant, { name: "acme", pinnedVersion: null });
+  assert.deepEqual((await registry.get("beta"))?.tenant, { name: "beta", pinnedVersion: "v2.0.0" });
+});
+
+test("POST /v1/tenants/rollout trims the pinned version before storing it", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await rollout(app, { names: ["acme"], pinnedVersion: "  v1.4.2  " });
+
+  assert.equal(res.status, 200);
+  assert.deepEqual((await registry.get("acme"))?.tenant, { name: "acme", pinnedVersion: "v1.4.2" });
+});
+
+test("POST /v1/tenants/rollout 400s malformed bodies without touching any record", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const notJson = await rollout(app, "not json at all");
+  assert.equal(notJson.status, 400);
+  assert.deepEqual(await notJson.json(), { error: "invalid_json" });
+
+  for (const [body, message] of [
+    [[], "body must be a JSON object"],
+    [{ names: [], pinnedVersion: "v1" }, "names must be a non-empty array of tenant names"],
+    [{ names: "acme", pinnedVersion: "v1" }, "names must be a non-empty array of tenant names"],
+    [{ names: ["acme", "  "], pinnedVersion: "v1" }, "names must be a non-empty array of tenant names"],
+    [{ names: ["acme", 7], pinnedVersion: "v1" }, "names must be a non-empty array of tenant names"],
+    [{ names: ["acme", "acme"], pinnedVersion: "v1" }, "names must not repeat a tenant"],
+    [{ names: ["acme"], pinnedVersion: "   " }, "pinnedVersion must be a non-blank string, or null to unpin"],
+    [{ names: ["acme"], pinnedVersion: 7 }, "pinnedVersion must be a non-blank string, or null to unpin"],
+    [{ names: ["acme"] }, "pinnedVersion must be a non-blank string, or null to unpin"],
+  ] as const) {
+    const res = await rollout(app, body);
+    assert.equal(res.status, 400, JSON.stringify(body));
+    assert.deepEqual(await res.json(), { error: "invalid_request", message });
+  }
+  assert.deepEqual((await registry.get("acme"))?.tenant, { name: "acme" });
+});
+
+test("POST /v1/tenants/rollout is all-or-nothing: one unknown name 404s and applies nothing", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await rollout(app, { names: ["acme", "ghost"], pinnedVersion: "v1.4.2" });
+
+  assert.equal(res.status, 404);
+  assert.deepEqual(await res.json(), { error: "tenant_not_found", message: 'unknown tenant "ghost"' });
+  assert.deepEqual((await registry.get("acme"))?.tenant, { name: "acme" });
+});
+
+test("POST /v1/tenants/rollout 409s a torn-down tenant and applies nothing", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  await registry.upsert({ tenant: { name: "gone" }, product: "orb", state: "torn down", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await rollout(app, { names: ["acme", "gone"], pinnedVersion: "v1.4.2" });
+
+  assert.equal(res.status, 409);
+  assert.deepEqual(await res.json(), { error: "tenant_torn_down", message: 'tenant "gone" is torn down' });
+  assert.deepEqual((await registry.get("acme"))?.tenant, { name: "acme" });
+});
+
+test("POST /v1/tenants/rollout sits behind the same Bearer wall as every other /v1/tenants route", async () => {
+  const app = createTenantHttpApp(baseDeps());
+
+  const res = await app.request("/v1/tenants/rollout", { method: "POST", body: JSON.stringify({ names: ["acme"], pinnedVersion: "v1" }) });
+
+  assert.equal(res.status, 401);
+  assert.deepEqual(await res.json(), { error: "unauthorized" });
+});
+
+test("GET /v1/tenants surfaces each tenant's pinnedVersion once one is set (#4898 admin visibility)", async () => {
+  const registry = createFakeTenantRegistry();
+  await registry.upsert({ tenant: { name: "acme", pinnedVersion: "v1.4.2" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" });
+  const app = createTenantHttpApp(baseDeps({ registry }));
+
+  const res = await app.request("/v1/tenants", authed());
+
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), {
+    tenants: [{ tenant: { name: "acme", pinnedVersion: "v1.4.2" }, product: "orb", state: "active", createdAt: "t0", updatedAt: "t0" }],
+  });
 });

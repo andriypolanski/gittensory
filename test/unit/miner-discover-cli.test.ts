@@ -1448,6 +1448,7 @@ describe("runDiscover (#4247)", () => {
         dbPath: ":memory:",
         saveRankedCandidates,
         listRankedCandidates: () => [],
+        purgeByRepo: () => 0,
         close: () => undefined,
       }),
       fetchCandidateIssuesWithSummary,

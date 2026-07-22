@@ -18,6 +18,9 @@ import {
 } from "../../packages/loopover-miner/lib/contribution-profile-cache.js";
 import { initPolicyVerdictCacheStore } from "../../packages/loopover-miner/lib/policy-verdict-cache.js";
 import { openGovernorState } from "../../packages/loopover-miner/lib/governor-state.js";
+import { initRankedCandidatesStore } from "../../packages/loopover-miner/lib/ranked-candidates.js";
+import { openReplaySnapshotStore } from "../../packages/loopover-miner/lib/replay-snapshot.js";
+import { initDenyHookSynthesisStore } from "../../packages/loopover-miner/lib/deny-hook-synthesis.js";
 import { emptyContributionProfile } from "../../packages/loopover-miner/lib/contribution-profile.js";
 import {
   ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
@@ -85,7 +88,7 @@ describe("parsePurgeArgs (#5564)", () => {
 });
 
 describe("runPurge --dry-run (#5564, #6599)", () => {
-  it("counts matching rows across the nine real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
+  it("counts matching rows across the twelve real stores without writing anything, and reports attempt-log as not-purgeable", async () => {
     const root = tempDir();
     const claimDbPath = join(root, "claim-ledger.sqlite3");
     const eventDbPath = join(root, "event-ledger.sqlite3");
@@ -96,6 +99,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     const cacheDbPath = join(root, "contribution-profile-cache.sqlite3");
     const policyVerdictCacheDbPath = join(root, "policy-verdict-cache.sqlite3");
     const governorStateDbPath = join(root, "governor-state.sqlite3");
+    const rankedCandidatesDbPath = join(root, "ranked-candidates.sqlite3");
+    const replaySnapshotDbPath = join(root, "replay-snapshot.sqlite3");
+    const denyHookSynthesisDbPath = join(root, "deny-hook-synthesis.sqlite3");
     const attemptLogDbPath = join(root, "attempt-log.sqlite3"); // never created — dry run must not touch it
 
     const claimLedger = openClaimLedger(claimDbPath);
@@ -161,6 +167,48 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     governorState.recordOwnSubmission({ repoFullName: "acme/widgets", fingerprint: "fp-2" });
     governorState.close();
 
+    // The three #8009 stores, one acme/widgets row + one acme/other row each (only widgets' must count).
+    const rankedCandidates = initRankedCandidatesStore(rankedCandidatesDbPath);
+    rankedCandidates.saveRankedCandidates([
+      { repoFullName: "acme/widgets", issueNumber: 1, rankScore: 0.9 },
+      { repoFullName: "acme/other", issueNumber: 2, rankScore: 0.5 },
+    ]);
+    rankedCandidates.close();
+
+    const replaySnapshots = openReplaySnapshotStore(replaySnapshotDbPath);
+    replaySnapshots.saveSnapshot({
+      repoFullName: "acme/widgets",
+      commitSha: "abc123",
+      worktreePath: "/repo/.loopover-replay-snapshots/abc123",
+      targetDate: "2026-01-05T00:00:00+00:00",
+      commits: [{ sha: "abc123", date: "2026-01-05T00:00:00+00:00", subject: "t" }],
+      tags: [],
+      readme: null,
+    });
+    replaySnapshots.saveSnapshot({
+      repoFullName: "acme/other",
+      commitSha: "def456",
+      worktreePath: "/repo/.loopover-replay-snapshots/def456",
+      targetDate: "2026-01-05T00:00:00+00:00",
+      commits: [{ sha: "def456", date: "2026-01-05T00:00:00+00:00", subject: "t" }],
+      tags: [],
+      readme: null,
+    });
+    replaySnapshots.close();
+
+    // Two identical history records synthesize exactly one proposal per repo (the same seeding
+    // miner-deny-hook-synthesis.test.ts's own suite relies on).
+    const denyHookSynthesis = initDenyHookSynthesisStore(denyHookSynthesisDbPath);
+    denyHookSynthesis.refreshProposals("acme/widgets", [
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+    ]);
+    denyHookSynthesis.refreshProposals("acme/other", [
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+    ]);
+    denyHookSynthesis.close();
+
     const resolveDbPaths = {
       "claim-ledger": () => claimDbPath,
       "event-ledger": () => eventDbPath,
@@ -171,6 +219,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "contribution-profile-cache": () => cacheDbPath,
       "policy-verdict-cache": () => policyVerdictCacheDbPath,
       "governor-state": () => governorStateDbPath,
+      "ranked-candidates": () => rankedCandidatesDbPath,
+      "replay-snapshot": () => replaySnapshotDbPath,
+      "deny-hook-synthesis": () => denyHookSynthesisDbPath,
       "attempt-log": () => attemptLogDbPath,
     };
 
@@ -191,6 +242,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
         // governor-state sums BOTH tables: 2 reputation rows (two api_base_urls) + 2 own submissions = 4.
         { store: "governor-state", wouldPurge: 4 },
         { store: "policy-verdict-cache", wouldPurge: 1 },
+        { store: "ranked-candidates", wouldPurge: 1 },
+        { store: "replay-snapshot", wouldPurge: 1 },
+        { store: "deny-hook-synthesis", wouldPurge: 1 },
       ],
       attemptLogNote: ATTEMPT_LOG_NOT_PURGEABLE_NOTE,
       attemptLogTotalRows: 0,
@@ -223,12 +277,15 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
       "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
+      "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
+      "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
+      "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"], { resolveDbPaths })).toBe(0);
     const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-    expect(result.stores).toHaveLength(9);
+    expect(result.stores).toHaveLength(12);
     expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
     expect(result.attemptLogTotalRows).toBe(0);
     for (const resolve of Object.values(resolveDbPaths)) {
@@ -266,6 +323,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
       "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
+      "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
+      "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
+      "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
       "attempt-log": () => attemptLogDbPath,
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -294,6 +354,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
       "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
+      "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
+      "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
+      "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -335,6 +398,9 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
       LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB: process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB,
       LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB: process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB,
       LOOPOVER_MINER_GOVERNOR_STATE_DB: process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB,
+      LOOPOVER_MINER_RANKED_CANDIDATES_DB: process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB,
+      LOOPOVER_MINER_REPLAY_SNAPSHOT_DB: process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB,
+      LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB: process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB,
       LOOPOVER_MINER_ATTEMPT_LOG_DB: process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB,
     };
     process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB = join(root, "claim-ledger.sqlite3");
@@ -346,12 +412,15 @@ describe("runPurge --dry-run (#5564, #6599)", () => {
     process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB = join(root, "contribution-profile-cache.sqlite3");
     process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = join(root, "policy-verdict-cache.sqlite3");
     process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB = join(root, "governor-state.sqlite3");
+    process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB = join(root, "ranked-candidates.sqlite3");
+    process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB = join(root, "replay-snapshot.sqlite3");
+    process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB = join(root, "deny-hook-synthesis.sqlite3");
     process.env.LOOPOVER_MINER_ATTEMPT_LOG_DB = join(root, "attempt-log.sqlite3");
     try {
       const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
       expect(runPurge(["--repo", "acme/widgets", "--dry-run", "--json"])).toBe(0);
       const result = JSON.parse(String(log.mock.calls[0]?.[0]));
-      expect(result.stores).toHaveLength(9);
+      expect(result.stores).toHaveLength(12);
       expect(result.stores.every((entry: { wouldPurge: number }) => entry.wouldPurge === 0)).toBe(true);
       // Nothing was created — dry run against nonexistent default-path stores makes zero writes.
       expect(existsSync(process.env.LOOPOVER_MINER_CLAIM_LEDGER_DB)).toBe(false);
@@ -390,6 +459,9 @@ describe("runPurge (real, #5564, #6599)", () => {
       initContributionProfileCache: () => cache,
       openGovernorState: () => governorState,
       initPolicyVerdictCacheStore: () => fakeStore(0),
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -409,6 +481,9 @@ describe("runPurge (real, #5564, #6599)", () => {
         { store: "contribution-profile-cache", purged: 1 },
         { store: "governor-state", purged: 4 },
         { store: "policy-verdict-cache", purged: 0 },
+        { store: "ranked-candidates", purged: 0 },
+        { store: "replay-snapshot", purged: 0 },
+        { store: "deny-hook-synthesis", purged: 0 },
         { store: "attempt-log", purged: null, note: ATTEMPT_LOG_NOT_PURGEABLE_NOTE },
       ],
     });
@@ -450,6 +525,9 @@ describe("runPurge (real, #5564, #6599)", () => {
       initContributionProfileCache: () => fakeStore(0),
       openGovernorState: () => fakeStore(0),
       initPolicyVerdictCacheStore: () => fakeStore(0),
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
     };
 
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
@@ -486,6 +564,9 @@ describe("runPurge (real, #5564, #6599)", () => {
       initContributionProfileCache: () => fakeStore(0),
       openGovernorState: () => fakeStore(0),
       initPolicyVerdictCacheStore: () => fakeStore(0),
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--json"], options as never)).toBe(2);
@@ -506,6 +587,9 @@ describe("runPurge (real, #5564, #6599)", () => {
       initContributionProfileCache: () => fakeStore(0),
       openGovernorState: () => fakeStore(0),
       initPolicyVerdictCacheStore: () => fakeStore(0),
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
     };
     const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
     expect(runPurge(["--repo", "acme/widgets", "--json"], options as never)).toBe(2);
@@ -528,6 +612,9 @@ describe("runPurge (real, #5564, #6599)", () => {
       LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB: process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB,
       LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB: process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB,
       LOOPOVER_MINER_GOVERNOR_STATE_DB: process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB,
+      LOOPOVER_MINER_RANKED_CANDIDATES_DB: process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB,
+      LOOPOVER_MINER_REPLAY_SNAPSHOT_DB: process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB,
+      LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB: process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB,
     };
     const claimDbPath = join(root, "claim-ledger.sqlite3");
     const portfolioDbPath = join(root, "portfolio-queue.sqlite3");
@@ -541,6 +628,9 @@ describe("runPurge (real, #5564, #6599)", () => {
     process.env.LOOPOVER_MINER_CONTRIBUTION_PROFILE_CACHE_DB = join(root, "contribution-profile-cache.sqlite3");
     process.env.LOOPOVER_MINER_POLICY_VERDICT_CACHE_DB = join(root, "policy-verdict-cache.sqlite3");
     process.env.LOOPOVER_MINER_GOVERNOR_STATE_DB = join(root, "governor-state.sqlite3");
+    process.env.LOOPOVER_MINER_RANKED_CANDIDATES_DB = join(root, "ranked-candidates.sqlite3");
+    process.env.LOOPOVER_MINER_REPLAY_SNAPSHOT_DB = join(root, "replay-snapshot.sqlite3");
+    process.env.LOOPOVER_MINER_DENY_HOOK_SYNTHESIS_DB = join(root, "deny-hook-synthesis.sqlite3");
     try {
       // Seed real rows via the default store paths before purging through them.
       const seededClaim = openClaimLedger(claimDbPath);
@@ -608,6 +698,9 @@ describe("runPurge (real, #5564, #6599)", () => {
       "contribution-profile-cache": () => join(root, "contribution-profile-cache.sqlite3"),
       "policy-verdict-cache": () => join(root, "policy-verdict-cache.sqlite3"),
       "governor-state": () => join(root, "governor-state.sqlite3"),
+      "ranked-candidates": () => join(root, "ranked-candidates.sqlite3"),
+      "replay-snapshot": () => join(root, "replay-snapshot.sqlite3"),
+      "deny-hook-synthesis": () => join(root, "deny-hook-synthesis.sqlite3"),
       "attempt-log": () => join(root, "attempt-log.sqlite3"),
     };
 
@@ -632,6 +725,9 @@ describe("runPurge (real, #5564, #6599)", () => {
         initContributionProfileCache: () => fakeStore(0),
         openGovernorState: () => fakeStore(0),
         initPolicyVerdictCacheStore: () => fakeStore(0),
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const purged = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -679,6 +775,9 @@ describe("runPurge (real, #5564, #6599)", () => {
         initContributionProfileCache: () => cacheStore,
         openGovernorState: () => governorStore,
         initPolicyVerdictCacheStore: () => fakeStore(0),
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
@@ -722,11 +821,92 @@ describe("runPurge (real, #5564, #6599)", () => {
         initContributionProfileCache: () => fakeStore(0),
         openGovernorState: () => fakeStore(0),
         initPolicyVerdictCacheStore: () => policyStore,
+      initRankedCandidatesStore: () => fakeStore(0),
+      openReplaySnapshotStore: () => fakeStore(0),
+      initDenyHookSynthesisStore: () => fakeStore(0),
       } as never),
     ).toBe(0);
     const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
     expect(summary.stores).toContainEqual({ store: "policy-verdict-cache", purged: 1 });
     expect(policyStore.get("acme/widgets")).toBeNull();
     expect(policyStore.get("acme/other")).not.toBeNull();
+  });
+
+  it("REGRESSION (#8009): really deletes ranked-candidates, replay-snapshot, and deny-hook-synthesis rows across api_base_urls, leaving other repos intact", () => {
+    const root = tempDir();
+    const rankedDbPath = join(root, "ranked-candidates.sqlite3");
+    const replayDbPath = join(root, "replay-snapshot.sqlite3");
+    const denyDbPath = join(root, "deny-hook-synthesis.sqlite3");
+    const history = [
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+      { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+    ];
+
+    const seededRanked = initRankedCandidatesStore(rankedDbPath);
+    seededRanked.saveRankedCandidates([
+      { repoFullName: "acme/widgets", issueNumber: 1, rankScore: 0.9 },
+      { repoFullName: "acme/other", issueNumber: 2, rankScore: 0.5 },
+    ]);
+    seededRanked.close();
+
+    const seededReplay = openReplaySnapshotStore(replayDbPath);
+    for (const [repoFullName, commitSha] of [["acme/widgets", "abc123"], ["acme/other", "def456"]] as const) {
+      seededReplay.saveSnapshot({
+        repoFullName,
+        commitSha,
+        worktreePath: `/repo/.loopover-replay-snapshots/${commitSha}`,
+        targetDate: "2026-01-05T00:00:00+00:00",
+        commits: [{ sha: commitSha, date: "2026-01-05T00:00:00+00:00", subject: "t" }],
+        tags: [],
+        readme: null,
+      });
+    }
+    seededReplay.close();
+
+    // acme/widgets proposals recorded under TWO forge hosts -- both must be swept, since the purge filters on
+    // repo_full_name alone (the api_base_url half of the composite key is ignored), like governor-state's.
+    const seededDeny = initDenyHookSynthesisStore(denyDbPath);
+    seededDeny.refreshProposals("acme/widgets", history, {}, "https://api.github.com");
+    seededDeny.refreshProposals("acme/widgets", history, {}, "https://gitlab.example/api");
+    seededDeny.refreshProposals("acme/other", history);
+    seededDeny.close();
+
+    // Inject the real openers against the seeded files (caller-owned, so we close them ourselves afterward).
+    const rankedStore = initRankedCandidatesStore(rankedDbPath);
+    const replayStore = openReplaySnapshotStore(replayDbPath);
+    const denyStore = initDenyHookSynthesisStore(denyDbPath);
+    closeables.push(rankedStore, replayStore, denyStore);
+
+    const log = vi.spyOn(console, "log").mockImplementation(() => undefined);
+    expect(
+      runPurge(["--repo", "acme/widgets", "--json"], {
+        openClaimLedger: () => fakeStore(0),
+        initEventLedger: () => fakeStore(0),
+        initGovernorLedger: () => fakeStore(0),
+        initPredictionLedger: () => fakeStore(0),
+        initPortfolioQueueStore: () => fakeStore(0),
+        initRunStateStore: () => fakeStore(0),
+        initContributionProfileCache: () => fakeStore(0),
+        openGovernorState: () => fakeStore(0),
+        initPolicyVerdictCacheStore: () => fakeStore(0),
+        initRankedCandidatesStore: () => rankedStore,
+        openReplaySnapshotStore: () => replayStore,
+        initDenyHookSynthesisStore: () => denyStore,
+      } as never),
+    ).toBe(0);
+    const summary = JSON.parse(String(log.mock.calls[0]?.[0]));
+    expect(summary.stores).toContainEqual({ store: "ranked-candidates", purged: 1 });
+    expect(summary.stores).toContainEqual({ store: "replay-snapshot", purged: 1 });
+    // deny-hook-synthesis sweeps the repo's rows under BOTH forge hosts: one proposal each = 2.
+    expect(summary.stores).toContainEqual({ store: "deny-hook-synthesis", purged: 2 });
+
+    // acme/widgets is gone from every purged table across both forge hosts...
+    expect(rankedStore.listRankedCandidates().map((row) => row.repoFullName)).toEqual(["acme/other"]);
+    expect(replayStore.getSnapshot("acme/widgets", "abc123")).toBeNull();
+    expect(denyStore.listProposals("acme/widgets", "https://api.github.com")).toEqual([]);
+    expect(denyStore.listProposals("acme/widgets", "https://gitlab.example/api")).toEqual([]);
+    // ...while another repo's rows are untouched.
+    expect(replayStore.getSnapshot("acme/other", "def456")).not.toBeNull();
+    expect(denyStore.listProposals("acme/other")).toHaveLength(1);
   });
 });

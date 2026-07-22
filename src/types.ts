@@ -279,6 +279,13 @@ export type JobMessage =
       requestedBy: "schedule" | "test";
     }
   | {
+      // APR repo-transfer acceptance/expiry detection (#7741): resolve every pending APR transfer — probe GitHub,
+      // mark accepted / accepted-and-departed / expired (>7 days), reconcile the per-repo AMS pause. Enqueued by
+      // the cron hourly ONLY when LOOPOVER_APR_TRANSFER_POLL is set; flag-OFF (default) it is never created.
+      type: "poll-apr-repo-transfers";
+      requestedBy: "schedule" | "test";
+    }
+  | {
       // Self-host backlog-convergence sweep (#selfhost-backlog-convergence): finds open PRs whose public review
       // surface was never published for their current head (a blind spot the periodic re-gate sweep's dispatch-
       // time stamping can miss — see selfhost/backlog-convergence.ts) and fans out one `agent-regate-pr` job per
@@ -529,6 +536,17 @@ export type AdvisoryFinding = {
   detail: string;
   action?: string;
   publicText?: string;
+  /** True when `detail`/`publicText` is a fixed, engineer-authored message with no interpolated contributor
+   *  content or AI-generated text (e.g. the content lane's deterministic surface-review findings — see
+   *  `surfaceFinding` in content-lane-wire.ts). `PRIVATE_FORBIDDEN_TERMS`/`CHECK_RUN_FORBIDDEN_TERMS` exist to
+   *  catch a private scoring-rubric term (reward/trust-score/wallet/hotkey/...) LEAKING into dynamically
+   *  assembled or AI-generated text — applying that same scrub to a static string an engineer already wrote
+   *  and reviewed only replaces a real word with the confusing, uninformative "[context]" placeholder (#7981:
+   *  "Subnet document appears to include secret, wallet, PAT, or private-key material" rendered as "...secret,
+   *  [context], PAT..." to both contributors and the maintainer debugging the close). Absent/false preserves
+   *  today's scrub-everything behavior; only a producer that has audited its own text for private-rubric leaks
+   *  should set this to true. */
+  alreadyPublicSafe?: boolean;
   /** Calibrated confidence in [0,1] for an AI-judgment finding (`ai_consensus_defect` / `ai_review_split`) — the
    *  reviewer's own probability that the flagged blocker is a real defect (#8). The gate's `aiReviewCloseConfidence`
    *  floor and `aiReviewLowConfidenceDisposition` (#4603) use it: a sub-floor finding still blocks the gate when

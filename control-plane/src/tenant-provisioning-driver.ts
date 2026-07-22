@@ -18,6 +18,12 @@ export type Product = string;
  *  admin commands address a tenant by. */
 export type Tenant = {
   name: string;
+  /** #4898 (fleet rollout, decision ratified 2026-07-21): the image version THIS tenant's container resolves
+   *  at (re)start, instead of a shared `:latest` tag. Product-agnostic — the same field for ORB and AMS
+   *  tenants. Absent/null = unpinned (the tenant follows its release channel's default, exactly the pre-#4898
+   *  behavior). A rollout updates this field on an explicit list of tenants; rollback reverts it — see
+   *  http-app.ts's `POST /v1/tenants/rollout`. */
+  pinnedVersion?: string | null;
 };
 
 /** The full tenant lifecycle vocabulary the #7180 provisioning API reports, passed through verbatim by

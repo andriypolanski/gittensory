@@ -1,7 +1,7 @@
 export type FreshnessIssue = {
   state: string;
-  updatedAt?: string | null;
-  createdAt?: string | null;
+  updatedAt?: string | null | undefined;
+  createdAt?: string | null | undefined;
 };
 
 function round4(value: number): number {

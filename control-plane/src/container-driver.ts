@@ -58,12 +58,25 @@ function bindingFor(config: ContainerDriverConfig, product: Product): ContainerN
   return binding;
 }
 
+/** The env var a tenant's container reads its pinned image version from at (re)start (#4898). A Cloudflare
+ *  Container binding is fixed to one image at the wrangler.jsonc level (see `ContainerDriverConfig.bindings`),
+ *  so per-tenant versioning cannot swap the image reference binding-side — instead the tenant's own
+ *  `pinnedVersion` rides into the container, whose entrypoint resolves the versioned artifact itself. */
+export const PINNED_VERSION_ENV_VAR = "LOOPOVER_PINNED_VERSION";
+
 /** Idempotent: an already-provisioned tenant's container is left running as-is, never restarted -- a repeat
- *  create must not interrupt a container mid-work. */
+ *  create must not interrupt a container mid-work. A tenant with a `pinnedVersion` (#4898) starts with that
+ *  version in {@link PINNED_VERSION_ENV_VAR}; an unpinned tenant gets the exact pre-#4898 `start()` call, so
+ *  every existing tenant's behavior is byte-identical until a rollout pins it. */
 export async function createTenantContainer(config: ContainerDriverConfig, request: TenantProvisioningRequest): Promise<void> {
   const stub = bindingFor(config, request.product).getByName(instanceNameFor(request));
   if (await stub.isProvisioned()) return;
-  await stub.start();
+  const pinnedVersion = request.tenant.pinnedVersion;
+  if (pinnedVersion) {
+    await stub.start({ envVars: { [PINNED_VERSION_ENV_VAR]: pinnedVersion } });
+  } else {
+    await stub.start();
+  }
   await stub.markProvisioned();
 }
 

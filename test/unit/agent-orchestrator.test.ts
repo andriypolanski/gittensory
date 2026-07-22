@@ -804,6 +804,24 @@ describe("agent orchestrator", () => {
     expect(card.publicSafe.summary).not.toMatch(/\/root\/work|\/var\/log|C:\/Users\/alice/);
   });
 
+  it("redacts 'private key' from the public-safe card, matching its sibling redaction lists (#8020)", () => {
+    // `private keys?` was present in 5 sibling public-redaction vocabularies (miner-dashboard-recommendations.ts:45,
+    // control-panel-roles.ts:297, decision-pack.ts:1438, weekly-value-report.ts:417, extension-contributor-context.ts:31)
+    // but missing here, so an App-credential reference leaked through publicSafe.whyNow unredacted.
+    const card = buildAgentActionExplanationCard({
+      actionType: "choose_next_work",
+      status: "blocked",
+      why: ["Blocked by a private key rotation on the App credential."],
+      blockedBy: ["private key rotation pending"],
+      publicSafeSummary: "Resolve the App private key rotation before rerunning.",
+      safetyClass: "private",
+    });
+
+    expect(card.publicSafe.summary).not.toMatch(/private key/i);
+    expect(card.publicSafe.summary).toMatch(/private context/);
+    expect(card.publicSafe.whyNow).not.toMatch(/private key/i);
+  });
+
   it("does not split a surrogate pair when truncating a card field at the 300-character cap", () => {
     // A string is well-formed UTF-16 iff it has no lone surrogate (a high surrogate not followed by a
     // low one, or a low surrogate not preceded by a high one). Equivalent to String#isWellFormed without

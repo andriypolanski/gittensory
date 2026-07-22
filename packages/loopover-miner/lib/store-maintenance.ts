@@ -58,6 +58,18 @@ export const GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC: LedgerPurgeSpec = { table: "go
  *  column, exactly like `attempt-log.js`). */
 export const POLICY_VERDICT_CACHE_PURGE_SPEC: LedgerPurgeSpec = { table: "policy_verdict_cache", repoColumn: "repo_scope" };
 
+/** Three more repo-scoped stores the #5564/#7091/#6987 sweeps missed (#8009), same `repoColumn` shape and same
+ *  internal-constant-only discipline. ranked-candidates is a wholesale-replaced snapshot, but its rows persist
+ *  between discover runs; replay_snapshots embeds commit SHAs and README content. deny-hook-synthesis's live
+ *  table is always `deny_rule_proposals` (`deny_rule_proposals_v2` exists only transiently mid-rebuild inside
+ *  its forge-scope migration, never at rest, so one spec covers both pre- and post-migration files), and — like
+ *  `governor_reputation_history` above — it is purged on `repo_full_name` alone (its key is composite with
+ *  `api_base_url`), so a right-to-be-forgotten sweep clears the repo across every forge host it was recorded
+ *  against, not just the default one. */
+export const RANKED_CANDIDATES_PURGE_SPEC: LedgerPurgeSpec = { table: "miner_ranked_candidates", repoColumn: "repo_full_name" };
+export const REPLAY_SNAPSHOT_PURGE_SPEC: LedgerPurgeSpec = { table: "replay_snapshots", repoColumn: "repo_full_name" };
+export const DENY_HOOK_SYNTHESIS_PURGE_SPEC: LedgerPurgeSpec = { table: "deny_rule_proposals", repoColumn: "repo_full_name" };
+
 export type StoreIntegrityResult = { name: string; ok: boolean; detail: string };
 export type LedgerRetentionPolicy = { maxAgeMs?: number; maxRows?: number };
 

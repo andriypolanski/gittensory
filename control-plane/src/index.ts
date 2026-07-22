@@ -55,6 +55,7 @@ export {
   createContainerDriver,
   createTenantContainer,
   destroyTenantContainer,
+  PINNED_VERSION_ENV_VAR,
   tenantContainerExists,
   type ContainerDriver,
   type ContainerDriverConfig,

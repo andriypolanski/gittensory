@@ -197,6 +197,33 @@ describe("loopover-miner ranked-candidates store (#4859 prerequisite)", () => {
     }
   });
 
+  it("purgeByRepo deletes only the given repo's snapshot rows and returns the count (#8009)", () => {
+    const dbPath = join(tempRoot(), "ranked-candidates.sqlite3");
+    const store = initRankedCandidatesStore(dbPath);
+    try {
+      store.saveRankedCandidates(
+        [fullCandidate, { ...fullCandidate, issueNumber: 43 }, { ...fullCandidate, repoFullName: "acme/other" }],
+        Date.parse("2026-07-13T12:00:00.000Z"),
+      );
+      expect(store.purgeByRepo("acme/widgets")).toBe(2);
+      expect(store.listRankedCandidates().map((row) => row.repoFullName)).toEqual(["acme/other"]);
+    } finally {
+      store.close();
+    }
+  });
+
+  it("purgeByRepo returns 0 for an unknown repo, and rejects a malformed one with its own error name (#8009)", () => {
+    const dbPath = join(tempRoot(), "ranked-candidates.sqlite3");
+    const store = initRankedCandidatesStore(dbPath);
+    try {
+      expect(store.purgeByRepo("acme/widgets")).toBe(0);
+      // The shared owner/repo guard throws the purge path's OWN error name, not the candidate write path's.
+      expect(() => store.purgeByRepo("not-a-repo")).toThrow("invalid_repo_full_name");
+    } finally {
+      store.close();
+    }
+  });
+
   it("rolls back the whole transaction on a genuine SQL-level failure (a duplicate repo+issue within one save)", () => {
     // Both entries individually pass normalizeCandidate (nothing there checks for array-internal duplicates), so
     // this is the one realistic way to reach the PRIMARY KEY constraint -- and therefore replaceAll's own

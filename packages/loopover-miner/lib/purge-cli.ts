@@ -1,7 +1,8 @@
 // `loopover-miner purge` (#5564, #6599): an explicit, operator-invoked right-to-be-forgotten path across the local
 // ledgers. Deletes every row for one repo from the stores that have a real `repoColumn` (claim-ledger,
-// event-ledger, governor-ledger, prediction-ledger, portfolio-queue, run-state, contribution-profile-cache, and
-// governor-state's two repo-scoped tables — #7091), via each store's own `purgeByRepo` method (which reuses
+// event-ledger, governor-ledger, prediction-ledger, portfolio-queue, run-state, contribution-profile-cache,
+// governor-state's two repo-scoped tables — #7091 — plus policy-verdict-cache — #6987 — and ranked-candidates,
+// replay-snapshot, and deny-hook-synthesis — #8009), via each store's own `purgeByRepo` method (which reuses
 // `store-maintenance.js`'s shared, identifier-guarded `purgeStoreByRepo`).
 // `attempt-log.js` is deliberately reported as not-purgeable rather than silently skipped or approximated: its
 // payload is a free-form `Record<string, unknown>` with no dedicated repo column, so a precise per-repo match
@@ -30,6 +31,12 @@ import { openGovernorState, resolveGovernorStateDbPath } from "./governor-state.
 import type { GovernorState } from "./governor-state.js";
 import { initPolicyVerdictCacheStore, resolvePolicyVerdictCacheDbPath } from "./policy-verdict-cache.js";
 import type { PolicyVerdictCacheStore } from "./policy-verdict-cache.js";
+import { initRankedCandidatesStore, resolveRankedCandidatesDbPath } from "./ranked-candidates.js";
+import type { RankedCandidatesStore } from "./ranked-candidates.js";
+import { openReplaySnapshotStore, resolveReplaySnapshotDbPath } from "./replay-snapshot.js";
+import type { ReplaySnapshotStore } from "./replay-snapshot.js";
+import { initDenyHookSynthesisStore, resolveDenyHookSynthesisDbPath } from "./deny-hook-synthesis.js";
+import type { DenyHookSynthesisStore } from "./deny-hook-synthesis.js";
 import { resolveAttemptLogDbPath } from "./attempt-log.js";
 import {
   CLAIM_LEDGER_PURGE_SPEC,
@@ -42,6 +49,9 @@ import {
   GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC,
   GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC,
   POLICY_VERDICT_CACHE_PURGE_SPEC,
+  RANKED_CANDIDATES_PURGE_SPEC,
+  REPLAY_SNAPSHOT_PURGE_SPEC,
+  DENY_HOOK_SYNTHESIS_PURGE_SPEC,
   countStoreByRepo,
   describeError,
 } from "./store-maintenance.js";
@@ -66,7 +76,10 @@ type PurgeOpenerKey =
   | "initRunStateStore"
   | "initContributionProfileCache"
   | "openGovernorState"
-  | "initPolicyVerdictCacheStore";
+  | "initPolicyVerdictCacheStore"
+  | "initRankedCandidatesStore"
+  | "openReplaySnapshotStore"
+  | "initDenyHookSynthesisStore";
 
 export type PurgeCliOptions = {
   openClaimLedger?: () => ClaimLedger;
@@ -78,6 +91,9 @@ export type PurgeCliOptions = {
   initContributionProfileCache?: () => ContributionProfileCache;
   openGovernorState?: () => GovernorState;
   initPolicyVerdictCacheStore?: () => PolicyVerdictCacheStore;
+  initRankedCandidatesStore?: () => RankedCandidatesStore;
+  openReplaySnapshotStore?: () => ReplaySnapshotStore;
+  initDenyHookSynthesisStore?: () => DenyHookSynthesisStore;
   resolveDbPaths?: Record<string, () => string>;
 };
 
@@ -102,6 +118,12 @@ const REAL_PURGE_TARGETS: PurgeTarget[] = [
   // single handle (never reopening the file), and its dry-run count sums both via `specs` (#7091).
   { name: "governor-state", optionKey: "openGovernorState", opener: openGovernorState, resolveDbPath: resolveGovernorStateDbPath, specs: [GOVERNOR_REPUTATION_HISTORY_PURGE_SPEC, GOVERNOR_OWN_SUBMISSIONS_PURGE_SPEC] },
   { name: "policy-verdict-cache", optionKey: "initPolicyVerdictCacheStore", opener: initPolicyVerdictCacheStore, resolveDbPath: resolvePolicyVerdictCacheDbPath, spec: POLICY_VERDICT_CACHE_PURGE_SPEC },
+  // Three more repo-scoped stores the earlier sweeps missed (#8009). deny-hook-synthesis's dry-run count works
+  // on both pre- and post-forge-scope files: its live table is `deny_rule_proposals` either way, and the purge
+  // filters on `repo_full_name` alone (all forge hosts), per its spec's own doc in store-maintenance.js.
+  { name: "ranked-candidates", optionKey: "initRankedCandidatesStore", opener: initRankedCandidatesStore, resolveDbPath: resolveRankedCandidatesDbPath, spec: RANKED_CANDIDATES_PURGE_SPEC },
+  { name: "replay-snapshot", optionKey: "openReplaySnapshotStore", opener: openReplaySnapshotStore, resolveDbPath: resolveReplaySnapshotDbPath, spec: REPLAY_SNAPSHOT_PURGE_SPEC },
+  { name: "deny-hook-synthesis", optionKey: "initDenyHookSynthesisStore", opener: initDenyHookSynthesisStore, resolveDbPath: resolveDenyHookSynthesisDbPath, spec: DENY_HOOK_SYNTHESIS_PURGE_SPEC },
 ];
 
 export type ParsedPurgeArgs = { json: boolean; dryRun: boolean; repoFullName: string } | { error: string };

@@ -2,6 +2,7 @@ import { join } from "node:path";
 import { removeWorktree } from "@loopover/engine";
 import type { WorktreeExecFn, WorktreeRemoveResult } from "@loopover/engine";
 import { openLocalStoreAdapter, resolveLocalStoreDbPath, normalizeLocalStoreDbPath } from "./local-store.js";
+import { REPLAY_SNAPSHOT_PURGE_SPEC, purgeStoreByRepo } from "./store-maintenance.js";
 
 // Freeze/snapshot mechanism for historical replay targets (#3010). Given a repo and a commit SHA T, exports:
 //  (a) the full working tree checked out AT T via a DETACHED git worktree -- the same isolation primitive
@@ -51,6 +52,8 @@ export type ReplaySnapshotStore = {
   dbPath: string;
   getSnapshot(repoFullName: string, commitSha: string): ReplaySnapshot | null;
   saveSnapshot(snapshot: Omit<ReplaySnapshot, "exportedAt">): ReplaySnapshot;
+  /** Delete every cached snapshot row for one repo (#8009); returns the number of rows removed. */
+  purgeByRepo(repoFullName: string): number;
   close(): void;
 };
 
@@ -272,6 +275,14 @@ export function openReplaySnapshotStore(dbPath: string = resolveReplaySnapshotDb
     dbPath: resolvedPath,
     getSnapshot,
     saveSnapshot,
+    /** Explicit, operator-invoked right-to-be-forgotten purge (#8009) — never runs automatically; this is what
+     *  `loopover-miner purge` invokes. Reuses store-maintenance.js's identifier-guarded purgeStoreByRepo against
+     *  the raw handle (the #7175 driver seam covers this store's own CRUD, not the shared maintenance helpers),
+     *  exactly like the other repo-scoped stores. Removes only DB rows — exported worktrees are transient files
+     *  the snapshot merely references, cleaned up by removeReplaySnapshotWorktree in their own lifecycle. */
+    purgeByRepo(repoFullName: string): number {
+      return purgeStoreByRepo(db, REPLAY_SNAPSHOT_PURGE_SPEC, normalizeRepoFullName(repoFullName));
+    },
     close() {
       db.close();
     },

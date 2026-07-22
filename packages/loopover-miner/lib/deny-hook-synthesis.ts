@@ -24,6 +24,7 @@ import {
 import type { DenyRuleProposal, SynthesisConfig } from "@loopover/engine";
 import { DEFAULT_FORGE_CONFIG } from "./forge-config.js";
 import type { DenyRule } from "./deny-hooks.js";
+import { DENY_HOOK_SYNTHESIS_PURGE_SPEC, purgeStoreByRepo } from "./store-maintenance.js";
 
 // Re-export the pure synthesis helpers from the engine so this module's public API is unchanged after #5667
 // moved derivation/audit into @loopover/engine. Only the SQLite store below (and its forge/db-path helpers) is
@@ -59,6 +60,8 @@ export type DenyHookSynthesisStore = {
     repoFullName: string,
     options?: { includeDefaults?: boolean; apiBaseUrl?: string },
   ): DenyRule[];
+  /** Delete every proposal row for one repo across ALL forge hosts (#8009); returns the number of rows removed. */
+  purgeByRepo(repoFullName: string): number;
   close(): void;
 };
 
@@ -247,6 +250,13 @@ export function initDenyHookSynthesisStore(dbPath: string = resolveDenyHookSynth
         includeDefaults: options.includeDefaults,
         approvedProposals: proposals,
       } as Parameters<typeof resolveEffectiveDenyRules>[0]);
+    },
+    /** Explicit, operator-invoked right-to-be-forgotten purge (#8009) — never runs automatically; this is what
+     *  `loopover-miner purge` invokes. Filters on `repo_full_name` alone (the spec's own doc covers why), so —
+     *  unlike every other method here, which scopes to one forge — the sweep clears the repo's proposals under
+     *  every `api_base_url` they were recorded against, mirroring governor-state's purgeByRepo. */
+    purgeByRepo(repoFullName) {
+      return purgeStoreByRepo(db, DENY_HOOK_SYNTHESIS_PURGE_SPEC, normalizeRepoFullName(repoFullName));
     },
     close() {
       db.close();

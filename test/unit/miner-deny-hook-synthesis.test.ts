@@ -231,6 +231,27 @@ describe("initDenyHookSynthesisStore() (#4522)", () => {
       expect(() => store.setProposalStatus("acme/widgets", "path:abc", "bogus")).toThrow("invalid_proposal_status");
     });
 
+    it("purgeByRepo sweeps the repo's proposals under EVERY forge host and leaves other repos intact (#8009)", () => {
+      const store = tempStore();
+      const history = [
+        { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+        { blockerCodes: ["guardrail_hold"], changedPaths: ["CHANGELOG.md"] },
+      ];
+      store.refreshProposals("acme/widgets", history, {}, "https://api.github.com");
+      store.refreshProposals("acme/widgets", history, {}, "https://gitlab.example/api");
+      store.refreshProposals("acme/other", history);
+
+      // Filters on repo_full_name alone: one proposal per forge host = 2 rows removed.
+      expect(store.purgeByRepo("acme/widgets")).toBe(2);
+      expect(store.listProposals("acme/widgets", "https://api.github.com")).toEqual([]);
+      expect(store.listProposals("acme/widgets", "https://gitlab.example/api")).toEqual([]);
+      expect(store.listProposals("acme/other")).toHaveLength(1);
+    });
+
+    it("purgeByRepo returns 0 when the repo has no proposals (#8009)", () => {
+      expect(tempStore().purgeByRepo("acme/widgets")).toBe(0);
+    });
+
     it("migrates an existing pre-#5563 file, backfilling api_base_url and preserving every row", () => {
       const dir = mkdtempSync(join(tmpdir(), "miner-deny-hook-synthesis-legacy-"));
       tempDirs.push(dir);

@@ -1,6 +1,7 @@
 import type { SQLOutputValue } from "node:sqlite";
 import { normalizeLocalStoreDbPath, openLocalStoreDb, resolveLocalStoreDbPath } from "./local-store.js";
 import { applySchemaMigrations } from "./schema-version.js";
+import { RANKED_CANDIDATES_PURGE_SPEC, purgeStoreByRepo } from "./store-maintenance.js";
 
 // Last-discover-run ranked-candidates snapshot (#4859 prerequisite): `discover-cli.js`'s runDiscover already
 // computes the FULL per-issue ranking breakdown (rankScore/laneFit/freshness/potential/feasibility/dupRisk, via
@@ -54,6 +55,8 @@ export type RankedCandidatesStore = {
   dbPath: string;
   saveRankedCandidates(candidates: RankedCandidateInput[], nowMs?: number): RankedCandidatesSaveResult;
   listRankedCandidates(): RankedCandidateRow[];
+  /** Delete every snapshot row for one repo (#8009); returns the number of rows removed. */
+  purgeByRepo(repoFullName: string): number;
   close(): void;
 };
 
@@ -101,17 +104,25 @@ function normalizeFiniteRankDimension(value: unknown, fallback: number): number 
   return Number.isFinite(value) ? (value as number) : fallback;
 }
 
+/** Guard an owner/repo value to the canonical `owner/repo` shape. Shared by the candidate write path and
+ *  purgeByRepo (#8009), each throwing its own error name — a rejected candidate and a rejected purge target are
+ *  different operator mistakes. */
+function normalizeRepoFullName(value: unknown, error: string): string {
+  const repoFullName = typeof value === "string" ? value.trim() : "";
+  const [owner, repo, extra] = repoFullName.split("/");
+  if (!owner || !repo || extra !== undefined) throw new Error(error);
+  return `${owner}/${repo}`;
+}
+
 function normalizeCandidate(candidate: RankedCandidateInput): NormalizedRankedCandidate {
   if (!candidate || typeof candidate !== "object") throw new Error("invalid_ranked_candidate");
-  const repoFullName = typeof candidate.repoFullName === "string" ? candidate.repoFullName.trim() : "";
-  const [owner, repo, extra] = repoFullName.split("/");
-  if (!owner || !repo || extra !== undefined) throw new Error("invalid_ranked_candidate");
+  const repoFullName = normalizeRepoFullName(candidate.repoFullName, "invalid_ranked_candidate");
   const issueNumber = candidate.issueNumber;
   if (!Number.isInteger(issueNumber) || issueNumber <= 0) throw new Error("invalid_ranked_candidate");
   const rankScore = Number(candidate.rankScore);
   if (!Number.isFinite(rankScore)) throw new Error("invalid_ranked_candidate");
   return {
-    repoFullName: `${owner}/${repo}`,
+    repoFullName,
     issueNumber,
     title: typeof candidate.title === "string" ? candidate.title : "",
     htmlUrl: typeof candidate.htmlUrl === "string" ? candidate.htmlUrl : null,
@@ -224,6 +235,12 @@ export function initRankedCandidatesStore(dbPath: string = resolveRankedCandidat
      *  discover run has ever saved a snapshot, or if the last run found zero candidates. */
     listRankedCandidates() {
       return listStatement.all().map((row) => rowToCandidate(asRankedCandidateDbRow(row)));
+    },
+    /** Explicit, operator-invoked right-to-be-forgotten purge (#8009) — never runs automatically; this is what
+     *  `loopover-miner purge` invokes. Reuses store-maintenance.js's identifier-guarded purgeStoreByRepo,
+     *  exactly like the other repo-scoped stores. */
+    purgeByRepo(repoFullName) {
+      return purgeStoreByRepo(db, RANKED_CANDIDATES_PURGE_SPEC, normalizeRepoFullName(repoFullName, "invalid_repo_full_name"));
     },
     close() {
       db.close();

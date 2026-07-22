@@ -456,4 +456,27 @@ describe("openReplaySnapshotStore (#3010) — round-trip persistence", () => {
     const store = tempStore();
     expect(store.getSnapshot("acme/widgets", "nope")).toBeNull();
   });
+
+  it("purgeByRepo deletes only the given repo's snapshot rows and returns the count (#8009)", () => {
+    const store = tempStore();
+    for (const [repoFullName, commitSha] of [["acme/widgets", "abc123"], ["acme/widgets", "abc456"], ["acme/other", "def789"]] as const) {
+      store.saveSnapshot({
+        repoFullName,
+        commitSha,
+        worktreePath: `/repo/.loopover-replay-snapshots/${commitSha}`,
+        targetDate: "2026-01-05T00:00:00+00:00",
+        commits: [],
+        tags: [],
+        readme: null,
+      });
+    }
+    expect(store.purgeByRepo("acme/widgets")).toBe(2);
+    expect(store.getSnapshot("acme/widgets", "abc123")).toBeNull();
+    expect(store.getSnapshot("acme/widgets", "abc456")).toBeNull();
+    expect(store.getSnapshot("acme/other", "def789")).not.toBeNull();
+  });
+
+  it("purgeByRepo returns 0 when the repo has no snapshots (#8009)", () => {
+    expect(tempStore().purgeByRepo("acme/widgets")).toBe(0);
+  });
 });

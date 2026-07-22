@@ -8,6 +8,7 @@ import {
   createContainerDriver,
   createTenantContainer,
   destroyTenantContainer,
+  PINNED_VERSION_ENV_VAR,
   tenantContainerExists,
   type ContainerDriverConfig,
   type ContainerNamespaceLike,
@@ -129,4 +130,61 @@ test("createContainerDriver bundles all three functions closed over one config",
   assert.equal(await driver.containerExists(REQUEST), true);
   await driver.destroyContainer(REQUEST);
   assert.equal(await driver.containerExists(REQUEST), false);
+});
+
+// #4898: a tenant's pinnedVersion rides into its container at (re)start as PINNED_VERSION_ENV_VAR — the only
+// per-tenant versioning seam available when the image reference itself is fixed at the wrangler.jsonc binding
+// level. The stub here captures start()'s options, which the package's shared fake deliberately doesn't.
+type StartOptions = Parameters<ContainerStubLike["start"]>[0];
+
+function optionCapturingStub(): ContainerStubLike & { startOptions: StartOptions[] } {
+  let provisioned = false;
+  const startOptions: StartOptions[] = [];
+  return {
+    startOptions,
+    async start(options?: StartOptions) {
+      startOptions.push(options);
+    },
+    async stop() {},
+    async isProvisioned() {
+      return provisioned;
+    },
+    async markProvisioned() {
+      provisioned = true;
+    },
+    async markDeprovisioned() {
+      provisioned = false;
+    },
+  };
+}
+
+function configFor(stub: ContainerStubLike): ContainerDriverConfig {
+  return { bindings: { orb: { getByName: () => stub } } };
+}
+
+test("a pinned tenant's container starts with PINNED_VERSION_ENV_VAR carrying its own version (#4898)", async () => {
+  const stub = optionCapturingStub();
+
+  await createTenantContainer(configFor(stub), { tenant: { name: "acme", pinnedVersion: "v1.4.2" }, product: "orb" });
+
+  assert.deepEqual(stub.startOptions, [{ envVars: { [PINNED_VERSION_ENV_VAR]: "v1.4.2" } }]);
+});
+
+test("an unpinned tenant's container start is byte-identical to the pre-#4898 call (no options at all)", async () => {
+  for (const tenant of [{ name: "acme" }, { name: "acme", pinnedVersion: null }]) {
+    const stub = optionCapturingStub();
+
+    await createTenantContainer(configFor(stub), { tenant, product: "orb" });
+
+    assert.deepEqual(stub.startOptions, [undefined]);
+  }
+});
+
+test("a repeat create of an already-provisioned pinned tenant never restarts it (#4898 keeps the idempotence contract)", async () => {
+  const stub = optionCapturingStub();
+  await stub.markProvisioned();
+
+  await createTenantContainer(configFor(stub), { tenant: { name: "acme", pinnedVersion: "v2.0.0" }, product: "orb" });
+
+  assert.deepEqual(stub.startOptions, []);
 });
