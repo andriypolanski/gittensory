@@ -99,9 +99,9 @@ describe("reward-risk freshness parity with loopover-engine", () => {
     const staleIssues = [issue(collab.fullName, 2, "Stale", { updatedAt: "2020-01-01T00:00:00.000Z" })];
     const undatedIssues = [issue(collab.fullName, 3, "Undated", { updatedAt: null, createdAt: null })];
 
-    const fresh = buildRepoRewardRisk({ ...base, issues: freshIssues, pullRequests: [] });
-    const stale = buildRepoRewardRisk({ ...base, issues: staleIssues, pullRequests: [] });
-    const undated = buildRepoRewardRisk({ ...base, issues: undatedIssues, pullRequests: [] });
+    const fresh = buildRepoRewardRisk({ ...base, issues: freshIssues, pullRequests: [], nowMs });
+    const stale = buildRepoRewardRisk({ ...base, issues: staleIssues, pullRequests: [], nowMs });
+    const undated = buildRepoRewardRisk({ ...base, issues: undatedIssues, pullRequests: [], nowMs });
 
     expect(fresh.rewardUpside.opportunityFactors.freshnessFactor).toBe(
       computeOpportunityFreshness(toFreshnessIssues(freshIssues), nowMs),
@@ -116,66 +116,25 @@ describe("reward-risk freshness parity with loopover-engine", () => {
   });
 
   it("uses createdAt when updatedAt is malformed", () => {
+    const nowMs = Date.now();
     const issuesForRisk = [
       issue(collab.fullName, 1, "Fallback", {
         updatedAt: "not-a-date",
-        createdAt: new Date(Date.now() - 2 * 86_400_000).toISOString(),
+        createdAt: new Date(nowMs - 2 * 86_400_000).toISOString(),
       }),
     ];
-    const result = buildRepoRewardRisk({ ...base, issues: issuesForRisk, pullRequests: [] });
+    const result = buildRepoRewardRisk({ ...base, issues: issuesForRisk, pullRequests: [], nowMs });
     expect(result.rewardUpside.opportunityFactors.freshnessFactor).toBeGreaterThan(0.7);
   });
 
   it("scores from the freshest open issue when multiple are present", () => {
+    const nowMs = Date.now();
     const issuesForRisk = [
       issue(collab.fullName, 1, "Stale", { updatedAt: "2020-01-01T00:00:00.000Z" }),
-      issue(collab.fullName, 2, "Fresh", { updatedAt: new Date(Date.now() - 2 * 86_400_000).toISOString() }),
+      issue(collab.fullName, 2, "Fresh", { updatedAt: new Date(nowMs - 2 * 86_400_000).toISOString() }),
     ];
-    const result = buildRepoRewardRisk({ ...base, issues: issuesForRisk, pullRequests: [] });
+    const result = buildRepoRewardRisk({ ...base, issues: issuesForRisk, pullRequests: [], nowMs });
     expect(result.rewardUpside.opportunityFactors.freshnessFactor).toBeGreaterThan(0.7);
-  });
-
-  it("pickIssueTimestamp and issueAgeDays cover defensive timestamp branches", () => {
-    const { pickIssueTimestamp, issueAgeDays } = rewardRiskFreshnessInternals;
-    expect(
-      pickIssueTimestamp({
-        repoFullName: collab.fullName,
-        number: 1,
-        title: "t",
-        state: "open",
-        labels: [],
-        linkedPrs: [],
-        updatedAt: "2026-07-03T00:00:00.000Z",
-        createdAt: "2020-01-01T00:00:00.000Z",
-      }),
-    ).toBe("2026-07-03T00:00:00.000Z");
-    expect(
-      pickIssueTimestamp({
-        repoFullName: collab.fullName,
-        number: 2,
-        title: "t",
-        state: "open",
-        labels: [],
-        linkedPrs: [],
-        updatedAt: "   ",
-        createdAt: "2026-07-03T00:00:00.000Z",
-      }),
-    ).toBe("2026-07-03T00:00:00.000Z");
-    expect(
-      pickIssueTimestamp({
-        repoFullName: collab.fullName,
-        number: 3,
-        title: "t",
-        state: "open",
-        labels: [],
-        linkedPrs: [],
-        updatedAt: null,
-        createdAt: null,
-      }),
-    ).toBeNull();
-    expect(issueAgeDays(null)).toBe(Number.POSITIVE_INFINITY);
-    expect(issueAgeDays("not-a-date")).toBe(Number.POSITIVE_INFINITY);
-    expect(issueAgeDays("2026-07-03T00:00:00.000Z")).toBeGreaterThanOrEqual(0);
   });
 });
 
