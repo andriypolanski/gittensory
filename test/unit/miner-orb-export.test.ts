@@ -2,8 +2,16 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-
+import type { OrbExportOutcome, OrbExportRow } from "../../packages/loopover-miner/lib/orb-export.js";
 import {
+  cleanupResourceCount,
+  resetProcessLifecycleForTesting,
+} from "../../packages/loopover-miner/lib/process-lifecycle.js";
+
+// Import the .ts SOURCE via a non-literal specifier so CI's `--coverage.all=false` run grades the changed
+// openOrbExportStore lines in orb-export.ts, not a stale post-build .js artifact (#8319, #8516 codecov fix).
+const ORB_EXPORT_MODULE = "../../packages/loopover-miner/lib/orb-export.ts";
+const {
   ORB_EXPORT_ENABLED_BY_DEFAULT,
   DEFAULT_AMS_COLLECTOR_URL,
   DEFAULT_ORB_EXPORT_TIMEOUT_MS,
@@ -17,8 +25,7 @@ import {
   resolveAmsCollectorUrl,
   resolveOrbExportDbPath,
   sendAmsExportBatch,
-} from "../../packages/loopover-miner/lib/orb-export.js";
-import type { OrbExportOutcome, OrbExportRow } from "../../packages/loopover-miner/lib/orb-export.js";
+} = (await import(ORB_EXPORT_MODULE)) as typeof import("../../packages/loopover-miner/lib/orb-export.js");
 
 let dir: string;
 function storePath() {
@@ -67,6 +74,15 @@ describe("orb-export store (#4277)", () => {
     store.setCursor("2026-01-02T00:00:00Z");
     expect(store.getCursor()).toBe("2026-01-02T00:00:00Z");
     store.close();
+  });
+
+  it("registers the store for crash-safe cleanup and unregisters it on close (#8319)", () => {
+    resetProcessLifecycleForTesting();
+    expect(cleanupResourceCount()).toBe(0);
+    const store = openOrbExportStore(storePath());
+    expect(cleanupResourceCount()).toBe(1);
+    store.close();
+    expect(cleanupResourceCount()).toBe(0);
   });
 });
 

@@ -7,7 +7,17 @@ import {
   DEFAULT_DENY_RULES,
   evaluateDenyHooks,
 } from "../../packages/loopover-miner/lib/deny-hooks.js";
+import type { DenyRuleProposal } from "../../packages/loopover-engine/src/miner/deny-hook-synthesis";
 import {
+  cleanupResourceCount,
+  resetProcessLifecycleForTesting,
+} from "../../packages/loopover-miner/lib/process-lifecycle.js";
+// #7525: normalizeRepoFullName is defined in the engine and re-exported unchanged by the miner-lib module
+// above; import it from the engine source directly so the guard's src branches are the ones exercised.
+import { normalizeRepoFullName } from "../../packages/loopover-engine/src/miner/deny-hook-synthesis";
+
+const DENY_HOOK_SYNTHESIS_MODULE = "../../packages/loopover-miner/lib/deny-hook-synthesis.ts";
+const {
   aggregateBlockerHistory,
   changedPathToDenyGlob,
   initDenyHookSynthesisStore,
@@ -16,11 +26,7 @@ import {
   resolveEffectiveDenyRules,
   setProposalStatuses,
   synthesizeDenyRuleProposals,
-} from "../../packages/loopover-miner/lib/deny-hook-synthesis.js";
-import type { DenyRuleProposal } from "../../packages/loopover-engine/src/miner/deny-hook-synthesis";
-// #7525: normalizeRepoFullName is defined in the engine and re-exported unchanged by the miner-lib module
-// above; import it from the engine source directly so the guard's src branches are the ones exercised.
-import { normalizeRepoFullName } from "../../packages/loopover-engine/src/miner/deny-hook-synthesis";
+} = (await import(DENY_HOOK_SYNTHESIS_MODULE)) as typeof import("../../packages/loopover-miner/lib/deny-hook-synthesis.js");
 
 const tempDirs: string[] = [];
 const stores: Array<{ close(): void }> = [];
@@ -161,6 +167,17 @@ describe("resolveEffectiveDenyRules() (#4522)", () => {
 describe("initDenyHookSynthesisStore() (#4522)", () => {
   it("rejects a blank/whitespace-only db path", () => {
     expect(() => initDenyHookSynthesisStore("   ")).toThrow("invalid_deny_hook_synthesis_db_path");
+  });
+
+  it("registers the store for crash-safe cleanup and unregisters it on close (#8319)", () => {
+    const dir = mkdtempSync(join(tmpdir(), "miner-deny-hook-synthesis-cleanup-"));
+    tempDirs.push(dir);
+    resetProcessLifecycleForTesting();
+    expect(cleanupResourceCount()).toBe(0);
+    const store = initDenyHookSynthesisStore(join(dir, "deny-hook-synthesis.sqlite3"));
+    expect(cleanupResourceCount()).toBe(1);
+    store.close();
+    expect(cleanupResourceCount()).toBe(0);
   });
 
   it("skips the forge-scope migration on a second open of an already-migrated file", () => {

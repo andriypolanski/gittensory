@@ -30,12 +30,18 @@ vi.mock("node:sqlite", async (importOriginal) => {
   return { ...actual, DatabaseSync: RecordingDatabaseSync };
 });
 import {
+  cleanupResourceCount,
+  resetProcessLifecycleForTesting,
+} from "../../packages/loopover-miner/lib/process-lifecycle.js";
+
+const LAPTOP_INIT_MODULE = "../../packages/loopover-miner/lib/laptop-init.ts";
+const {
   checkDockerPresent,
   checkLaptopStateSqlite,
   initLaptopState,
   resolveLaptopStateDbPath,
   runInit,
-} from "../../packages/loopover-miner/lib/laptop-init.js";
+} = (await import(LAPTOP_INIT_MODULE)) as typeof import("../../packages/loopover-miner/lib/laptop-init.js");
 
 const roots: string[] = [];
 
@@ -71,6 +77,15 @@ describe("loopover-miner laptop init (#2329)", () => {
     expect(existsSync(first.dbPath)).toBe(true);
     expect(existsSync(first.stateDir)).toBe(true);
     expect(checkLaptopStateSqlite(env).ok).toBe(true);
+  });
+
+  it("routes through the crash-safe openLocalStoreDb helper without leaking a cleanup registration (#8319)", () => {
+    const root = tempRoot();
+    const env = { LOOPOVER_MINER_CONFIG_DIR: join(root, "state") };
+    resetProcessLifecycleForTesting();
+    expect(cleanupResourceCount()).toBe(0);
+    initLaptopState(env);
+    expect(cleanupResourceCount()).toBe(0);
   });
 
   it("re-running init is idempotent and does not clobber existing metadata", () => {
