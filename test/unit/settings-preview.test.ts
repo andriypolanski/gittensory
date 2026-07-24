@@ -96,6 +96,32 @@ describe("decidePublicSurface", () => {
     expect(decidePublicSurface({ settings: settings({ commentMode: "all_prs" }), authorLogin: "x", minerStatus: "not_found" })).toMatchObject({ skipped: false, willComment: true, willLabel: false });
   });
 
+  it("#8324: covers the oss_maintainer + not_checked labeling fallback for every autoLabel/publicSurface combination", () => {
+    // shouldApplyPrLabel returns FALSE for oss_maintainer whenever minerStatus !== "confirmed", so this
+    // combination is governed entirely by decidePublicSurface's own inline disjunct — the branch that had
+    // zero coverage (`grep not_checked` matched nothing in this file before this test).
+    const notChecked = (overrides: Partial<RepositorySettings>) =>
+      decidePublicSurface({
+        settings: settings({ publicAudienceMode: "oss_maintainer", ...overrides }),
+        authorLogin: "contributor",
+        authorType: "User",
+        authorAssociation: "NONE",
+        minerStatus: "not_checked",
+      });
+
+    // autoLabelEnabled + a label-bearing surface ⇒ the fallback re-enables labeling.
+    expect(notChecked({ autoLabelEnabled: true, publicSurface: "comment_and_label" })).toMatchObject({ skipped: false, willLabel: true });
+    expect(notChecked({ autoLabelEnabled: true, publicSurface: "label_only" })).toMatchObject({ skipped: false, willLabel: true });
+    // The disjunct's own publicSurface check must exclude a comment-only surface.
+    expect(notChecked({ autoLabelEnabled: true, publicSurface: "comment_only" })).toMatchObject({ skipped: false, willLabel: false });
+    // autoLabelEnabled false ⇒ the fallback cannot fire; shouldApplyPrLabel's own false result stands.
+    expect(notChecked({ autoLabelEnabled: false, publicSurface: "comment_and_label" })).toMatchObject({ skipped: false, willLabel: false });
+
+    // And the `label` action mirrors willLabel exactly (the actions array is what callers act on).
+    expect(notChecked({ autoLabelEnabled: true, publicSurface: "label_only" }).actions).toContain("label");
+    expect(notChecked({ autoLabelEnabled: false, publicSurface: "label_only" }).actions).not.toContain("label");
+  });
+
   it("includes maintainer authors when configured", () => {
     const decision = decidePublicSurface({ settings: settings({ includeMaintainerAuthors: true }), authorLogin: "owner", authorAssociation: "OWNER", minerStatus: "confirmed" });
     expect(decision.skipped).toBe(false);
