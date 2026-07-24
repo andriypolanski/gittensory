@@ -500,6 +500,31 @@ NOVELTY_BONUS_SCALAR = 3
     expect(refreshed.payload.upstreamSourceSha).toBeUndefined();
     expect(refreshed.constants.MERGED_PR_BASE_SCORE).toBe(25);
     expect(refreshed.sourceKind).toBe("raw-github");
+    // #8327: the ONLY operator-facing signal that scoring is running unpinned against a mutable ref --
+    // pin it so a refactor that drops or garbles the string is caught.
+    expect(refreshed.warnings.some((warning) => /unpinned/i.test(warning))).toBe(true);
+  });
+
+  it("#8327: warns and falls back to empty language weights when ONLY the languages fetch fails", async () => {
+    // Prior tests that reached constantsUsable === true always stubbed programming_languages.json to
+    // succeed, and tests where languages failed had constants.py fail first (short-circuiting into the
+    // earlier !constantsUsable path) -- so this warning-push and its {} fallback never executed.
+    const env = createTestEnv({ GITHUB_PUBLIC_TOKEN: "token" });
+    vi.stubGlobal("fetch", async (input: RequestInfo | URL) => {
+      const url = input.toString();
+      if (url.includes("constants.py")) return new Response(VALID_CONSTANTS_PY + "MERGED_PR_BASE_SCORE = 25\n");
+      if (url.includes("programming_languages.json")) return new Response("not found", { status: 404 });
+      return new Response("not found", { status: 404 });
+    });
+
+    const refreshed = await refreshScoringModelSnapshot(env);
+
+    // The constants path still succeeded ...
+    expect(refreshed.sourceKind).toBe("raw-github");
+    expect(refreshed.constants.MERGED_PR_BASE_SCORE).toBe(25);
+    // ... while language weights degrade to {} with an explicit operator-facing warning.
+    expect(refreshed.programmingLanguages).toEqual({});
+    expect(refreshed.warnings.some((warning) => /Programming language weights fetch failed/.test(warning))).toBe(true);
   });
 
   it("pins the constants fetch to the resolved upstream SHA (immutable) when it can be resolved", async () => {
