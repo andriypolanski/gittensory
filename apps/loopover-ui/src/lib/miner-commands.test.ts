@@ -138,8 +138,7 @@ describe("buildMinerCommandActions (#8677)", () => {
     expect(byId(actions, "preflight")).toMatchObject({
       state: "ready",
       copyable: true,
-      command:
-        "loopover-mcp preflight --login alice --repo acme/widgets --base origin/main --json",
+      command: "loopover-mcp preflight --login alice --repo acme/widgets --base origin/main --json",
     });
     expect(byId(actions, "packet")).toMatchObject({
       state: "ready",
