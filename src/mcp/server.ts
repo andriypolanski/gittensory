@@ -1,6 +1,6 @@
 import { createMcpHandler } from "agents/mcp";
 import { instrumentToolDispatch, NOOP_DISPATCH_SINK, type DispatchTelemetrySink } from "./dispatch-telemetry";
-import { createDispatchTelemetrySink } from "./dispatch-telemetry-sink";
+import { createDispatchTelemetrySink, recordMcpInitialize, recordMcpToolsList } from "./dispatch-telemetry-sink";
 import type { Context } from "hono";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import type { RequestHandlerExtra } from "@modelcontextprotocol/sdk/shared/protocol.js";
@@ -272,7 +272,7 @@ import {
   AmsTenantWakeInput,
   AmsTenantWakeOutput,
 } from "@loopover/contract/tools";
-import { TOOL_CATEGORIES, type ToolCategory } from "@loopover/contract";
+import { TOOL_CATEGORIES, type McpInitializeTelemetry, type ToolCategory } from "@loopover/contract";
 import {
   runFindOpportunities,
   validateFindOpportunitiesInput,
@@ -665,21 +665,45 @@ export async function handleMcpRequest(c: AppContext): Promise<Response> {
   if (!identity) return c.json({ error: "unauthorized" }, 401);
 
   const telemetry = buildMcpClientTelemetry(c.req.raw.headers, { defaultClientName: "mcp" })!;
-  const usageMetadata = await describeMcpUsageRequest(c.req.raw, telemetry.metadata);
+  // ONE clone-and-parse of the JSON-RPC body, here, BEFORE createMcpHandler below consumes it (#10190).
+  // A second `request.clone()` after that point throws `TypeError: unusable` -- the Fetch spec forbids
+  // cloning a request whose body is already disturbed -- which is why the post-response handshake read this
+  // replaces turned every `initialize` into an unhandled 500.
+  const envelope = await readMcpRequestEnvelope(c.req.raw);
+  const usageMetadata = describeMcpUsageRequest(envelope, c.req.raw.method, telemetry.metadata);
   const startedAt = Date.now();
   const executionCtx = getExecutionContext(c);
   // #9525: the dispatch chokepoint's sink is built per request so its deferred work rides this
   // request's waitUntil. No OTel span on the Worker path -- the collector is a self-host concern, and
   // importing src/selfhost/otel.ts here would pull it into the Worker bundle.
-  const server = new LoopoverMcp(
-    c.env,
-    identity,
-    createDispatchTelemetrySink(c.env, (work) => executionCtx.waitUntil(work)),
-  ).createServer();
+  // #10175: session/server/client identity for PostHog's canonical $mcp_* events. `Mcp-Session-Id` is
+  // what ties one client's handshake, tools/list, and subsequent tool calls into a single analyzable
+  // session -- without it each event is an isolated row and no cross-event funnel works.
+  const analyticsContext = {
+    sessionId: trimmedHeader(c.req.raw.headers.get("mcp-session-id")),
+    serverName: MCP_SERVER_NAME,
+    serverVersion: LATEST_RECOMMENDED_MCP_VERSION,
+    clientName: telemetry.clientName,
+    clientVersion: telemetry.clientVersion,
+  };
+  const defer = (work: Promise<unknown>) => executionCtx.waitUntil(work);
+  const mcp = new LoopoverMcp(c.env, identity, createDispatchTelemetrySink(c.env, defer, undefined, analyticsContext));
+  const server = mcp.createServer();
   try {
     const response = await createMcpHandler(server, { route: "/mcp", enableJsonResponse: true })(c.req.raw, c.env, executionCtx);
     if (typeof usageMetadata.toolName === "string") {
       executionCtx.waitUntil(recordMcpToolTelemetry(c.env, usageMetadata.toolName, response.status < 400, Date.now() - startedAt));
+    }
+    // #10175: PostHog's canonical protocol-level events. Only on a request that actually succeeded, so
+    // a rejected handshake never inflates the session/client counts.
+    if (response.status < 400) {
+      if (usageMetadata.rpcMethod === "initialize") {
+        recordMcpInitialize(c.env, defer, readInitializeHandshake(envelope), analyticsContext);
+      } else if (usageMetadata.rpcMethod === "tools/list") {
+        // Names come from this server's own registration chokepoint, not the cross-server contract
+        // registry, so the event reports what was actually advertised to THIS client.
+        recordMcpToolsList(c.env, defer, mcp.registeredToolNames, analyticsContext);
+      }
     }
     await recordProductUsageEvent(c.env, {
       surface: "mcp",
@@ -730,10 +754,51 @@ async function recordMcpToolTelemetry(env: Env, tool: string, ok: boolean, durat
   }
 }
 
-async function describeMcpUsageRequest(request: Request, telemetryMetadata: Record<string, unknown> | undefined): Promise<Record<string, unknown>> {
+function trimmedHeader(value: string | null): string | undefined {
+  const trimmed = value?.trim();
+  return trimmed ? trimmed : undefined;
+}
+
+/**
+ * Read the `clientInfo` an `initialize` request introduced itself with (#10175).
+ *
+ * Deliberately reads the JSON-RPC params rather than reusing the `x-loopover-mcp-*` headers
+ * buildMcpClientTelemetry already parses: those are LoopOver's own convention, so only our published
+ * client sets them and every third-party MCP client (Claude Code, Cursor, a raw SDK script) would
+ * fall back to the "mcp" default and collapse into one indistinguishable bucket -- defeating the
+ * whole point of the event. `clientInfo` is the MCP spec's own field, sent by every conformant
+ * client. Returns an empty handshake for a malformed or absent body: the fields are optional by
+ * contract, and a session that connected is still worth counting.
+ */
+function readInitializeHandshake(envelope: McpRequestEnvelope | null): McpInitializeTelemetry {
+  const clientInfo = envelope?.params?.clientInfo;
+  return {
+    clientName: typeof clientInfo?.name === "string" ? clientInfo.name : undefined,
+    clientVersion: typeof clientInfo?.version === "string" ? clientInfo.version : undefined,
+  };
+}
+
+/** The JSON-RPC envelope fields the telemetry paths read. Deliberately structural and permissive: this is an
+ *  unvalidated client body, and every consumer below re-checks the type of the field it uses. */
+type McpRequestEnvelope = {
+  method?: unknown;
+  params?: { name?: unknown; clientInfo?: { name?: unknown; version?: unknown } };
+};
+
+/** Clone-and-parse the request body exactly once, at the top of {@link handleMcpRequest} (#10190). Returns
+ *  null for an absent or malformed body -- the telemetry fields are all optional by contract, and a request
+ *  that is still worth counting must never be failed over its own instrumentation. */
+async function readMcpRequestEnvelope(request: Request): Promise<McpRequestEnvelope | null> {
   const body = await request.clone().json().catch(() => null);
-  if (!body || typeof body !== "object") return { transport: "http", method: request.method, ...telemetryMetadata };
-  const envelope = body as { method?: unknown; params?: { name?: unknown } };
+  return body && typeof body === "object" ? (body as McpRequestEnvelope) : null;
+}
+
+function describeMcpUsageRequest(
+  envelope: McpRequestEnvelope | null,
+  method: string,
+  telemetryMetadata: Record<string, unknown> | undefined,
+): Record<string, unknown> {
+  if (!envelope) return { transport: "http", method, ...telemetryMetadata };
   const rpcMethod = typeof envelope.method === "string" ? envelope.method : undefined;
   const toolName = envelope.params && typeof envelope.params.name === "string" ? envelope.params.name : undefined;
   return {
@@ -785,10 +850,18 @@ void _INTERNAL_JOB_MESSAGE_TYPES_ARE_REAL;
 
 /** Master opt-in for the "admin" tool category (#7721), default OFF. Same truthy-string convention as every
  *  other LOOPOVER_* flag in this repo. Gates tool REGISTRATION in createServer() below; each admin tool
- *  handler additionally requires actor === "mcp-admin" at call time regardless of this flag. */
-function isMcpAdminEnabled(env: Env): boolean {
+ *  handler additionally requires actor === "mcp-admin" at call time regardless of this flag. Exported so the
+ *  `.well-known` discovery routes (#10039) can mirror this exact registration gate instead of growing a
+ *  second copy of the truthy-string regex. */
+export function isMcpAdminEnabled(env: Env): boolean {
   return /^(1|true|yes|on)$/i.test((env.LOOPOVER_MCP_ADMIN_ENABLED ?? "").trim());
 }
+
+/** The MCP `serverInfo.name` this server reports, and the `$mcp_server_name` its analytics carry.
+ *  One constant so the handshake a client sees and the dashboards an operator reads can never
+ *  disagree about what this server is called. Module-local: both readers (the handshake's serverInfo and
+ *  the analytics property builder) live in this file, and #10177 exported it without a consumer outside it. */
+const MCP_SERVER_NAME = "loopover";
 
 export class LoopoverMcp {
   private accessScopePromise: Promise<ControlPanelAccessScope> | null = null;
@@ -801,9 +874,14 @@ export class LoopoverMcp {
     private readonly telemetrySink?: DispatchTelemetrySink,
   ) {}
 
+  /** Tool names this server actually advertised, in registration order (#10175). Populated by the
+   *  `register` wrapper below so `$mcp_tools_list` reports what THIS server exposes rather than the
+   *  whole cross-server contract registry. */
+  readonly registeredToolNames: string[] = [];
+
   createServer(): McpServer {
     const server = new McpServer({
-      name: "loopover",
+      name: MCP_SERVER_NAME,
       // #9526: derived, not a hand-bumped constant. LATEST_RECOMMENDED_MCP_VERSION already reads
       // @loopover/mcp's package.json, which the release automation owns -- so serverInfo, the compatibility
       // metadata, the server card, and server.json all report the one version that actually shipped.
@@ -824,6 +902,7 @@ export class LoopoverMcp {
     // depending on which LoopOver surface you asked. Annotations were absent entirely, so a client that
     // gates confirmation on `destructiveHint` saw nothing for `loopover_delete_branch`.
     const register: McpServer["registerTool"] = (name, config, cb) => {
+      this.registeredToolNames.push(name);
       const advertised = getToolDefinition(name);
       /* v8 ignore next 2 -- unreachable while validate-mcp's "nothing registers without a contract
          entry" assertion holds; this throw is what keeps it unreachable. */

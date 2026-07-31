@@ -6,11 +6,24 @@
 #
 # Push-to-main only since 2026-07-24 (was also per-PR): at this repo's PR volume the ~5-minute
 # build-boot fired ~100x/week (its path list includes migrations/**, which nearly every backend PR
-# touches) and was a top runner-queue consumer. Pre-merge, ci.yml already validates everything except
-# the docker boot itself (db:migrations:check, schema drift, the selfhost pg integration suites); a
-# boot-breaking merge is caught by this run minutes after landing, and self-host users only ever
-# consume tagged releases (release-selfhost.yml), never main -- so the pre-merge boot smoke bought
-# almost nothing at real cost. Revisit if a hosted deploy ever tracks main directly.
+# touches) and was a top runner-queue consumer. A boot-breaking merge is caught by this run minutes
+# after landing, and self-host users only ever consume tagged releases (release-selfhost.yml), never
+# main. Revisit if a hosted deploy ever tracks main directly.
+#
+# #10138 CORRECTION. This header used to claim ci.yml validated "the selfhost pg integration suites"
+# pre-merge. It does not, and cannot: those suites require a real Postgres, ci.yml has no service
+# container, and without PG_TEST_URL they SKIP. The only place they run is this workflow -- post-merge.
+#
+# That gap shipped an outage. Migration 0209 used SQLite `AUTOINCREMENT`, which Postgres cannot parse,
+# so every Orb upgrading past 0208 crash-looped on boot. The "applies every migration" test here caught
+# it correctly on the very first push -- and then this workflow stayed red across five consecutive runs
+# while PRs kept merging, because a post-merge failure blocks nothing and pages no one.
+#
+# The pre-merge counterpart is test/unit/migration-dialect-portability.test.ts: it applies translateDdl
+# to every migration and fails if a SQLite-only construct survives. No Postgres, no service container,
+# ~11ms inside the unit run that already happens -- deliberately NOT a second PG job, because CI
+# runtime is the constraint that moved this workflow post-merge in the first place. It proves parseable,
+# not correct; this workflow remains the only real-Postgres coverage, and its red is worth acting on.
 name: self-host
 
 on:
@@ -159,3 +172,42 @@ jobs:
           curl -sf http://127.0.0.1:8787/metrics | grep -q 'loopover_uptime_seconds'
           docker logs gt 2>&1 | grep -q 'selfhost_migrations_applied'
           echo "self-host smoke test passed"
+
+  # #10146: a post-merge workflow going red blocks nothing and pages no one. This one caught migration 0209's
+  # SQLite-only AUTOINCREMENT correctly on the very first push (#10138) and then stayed red across five
+  # consecutive runs while PRs kept merging, because the only signal was a red check on a branch nobody was
+  # watching. #9951 had already solved this exact class for the publish workflows; the escalation is now a
+  # shared script rather than a second copy of it.
+  #
+  # Deliberately `failure()` and not `always()`: a success must never file anything. Deliberately consecutive
+  # -- one red run is a flake and alerting on it is how an alert gets muted.
+  escalate-persistent-failure:
+    name: escalate persistent failure
+    needs: build-boot
+    if: ${{ failure() }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      # The one thing this job does that build-boot cannot: file the tracking issue.
+      issues: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+      # Needed only for `node --experimental-strip-types` below (the escalation is a .ts script), and pinned to
+      # the same SHA as the other 32 setup-node uses in this repo -- including build-boot above -- so this job
+      # adds no dependency that was not already here.
+      #
+      # A scanner flagged this as a filesystem-read risk, citing `__tests__/authutil.test.ts` in setup-node's
+      # own repository. That is a test fixture, not runtime behaviour, and the feature it covers -- writing an
+      # auth token into .npmrc -- only engages when `registry-url` is supplied. It is supplied in the five
+      # publish-*.yml workflows and deliberately not here, so that path is inert in this job. Reviewed and
+      # dismissed rather than silenced; re-check if this step ever gains `registry-url`.
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version-file: .nvmrc
+      - name: Escalate if this workflow has failed on consecutive runs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node --experimental-strip-types scripts/escalate-workflow-outage.ts --workflow selfhost.yml

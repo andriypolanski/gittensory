@@ -25,6 +25,7 @@ import {
   listIssueSignalSample,
   listLatestSignalSnapshotsByTarget,
   listOtherOpenPullRequests,
+  listMergedPullRequestsInWindow,
   listOtherOpenPullRequestsForAuthor,
   listOpenIssues,
   listOpenPullRequests,
@@ -97,6 +98,9 @@ import {
   upsertRepositoryFromGitHub,
   getLatestAdvisoryForPullRequest,
 } from "../db/repositories";
+import { readVerdictStability, recordVerdict, shouldSkipStableVerdict, verdictStabilityKey, writeVerdictStability } from "../review/verdict-stability";
+import { withLinkedIssueMaintainerExemption, type LinkedIssueExemptionAuthor } from "../settings/linked-issue-exemption";
+import { resolveConfiguredRepoCandidates } from "../review/configured-repo-set";
 import { renameRepositoryIdentity } from "../db/repo-identity-rename";
 import {
   effectiveIssueCapForAccountAge,
@@ -347,6 +351,8 @@ import {
 } from "../signals/engine";
 import { isDuplicateClusterWinnerByClaim } from "../signals/duplicate-winner";
 import { isDuplicateWinnerEnabledGlobally, resolveDuplicateWinnerEnabled } from "../settings/duplicate-winner-mode";
+import { isSupersededCloseEnabledGlobally } from "../settings/superseded-close-mode";
+import { resolveSupersession, supersededSearchWindow, type LinkedIssueClosure, type SupersededByRival } from "../review/linked-issue-superseded";
 import { isOpenPrFileCollisionEnabledGlobally, resolveOpenPrFileCollisionEnabled } from "../settings/open-pr-file-collision-mode";
 import { buildAiReviewDiff, buildSecretScanDiff, totalAddedLineCount } from "../review/review-diff";
 // #4013 step 4 (prep): buildAiReviewDiff/buildSecretScanDiff moved to review-diff.ts (a natural existing
@@ -489,7 +495,7 @@ export {
 export { processJob } from "./job-dispatch";
 import { isVisualPath } from "../review/visual/paths";
 import { buildCapture, fetchExternalScreenshotContentBlock, fetchShotContentBlock, hasSuccessfulBotCapture, resolveVisualRoutes, type CaptureInteractionRoute, type CaptureRoute } from "../review/visual/capture";
-import { MAX_PREVIEW_POLL_ATTEMPTS, PREVIEW_POLL_SECONDS } from "../review/visual/preview-poll-budget";
+import { captureRetryAttemptCount, MAX_CAPTURE_RETRY_ATTEMPTS, PREVIEW_POLL_SECONDS, recordCaptureRetryAttempt } from "../review/visual/preview-poll-budget";
 import { visualCaptureRetryLatchState, VISUAL_CAPTURE_RETRY_LATCH_MAX_AGE_MS } from "../review/visual/visual-capture-retry-latch";
 import {
   clearFallbackDispatchMarker,
@@ -631,7 +637,6 @@ import {
 } from "../review/reputation-wire";
 import {
   isConvergenceRepoAllowed,
-  listConvergenceRepos,
 } from "../review/cutover-gate";
 import {
   convergedFeatureActive,
@@ -939,24 +944,15 @@ export async function fanOutAgentRegateSweepJobs(
   // that can merge/close. The action layer (maybeRunAgentMaintenance) stays autonomy-gated, so an observe repo is
   // re-reviewed but never auto-actioned. This is what makes advisory reviews fire on existing open PRs without
   // depending on a fresh webhook per PR.
-  const repositoriesByKey = new Map((await listRepositories(env)).map((repo) => [repo.fullName.toLowerCase(), repo]));
-  const byKey = new Map<string, { fullName: string; installationId?: number }>();
-  for (const repo of repositoriesByKey.values())
-    byKey.set(repo.fullName.toLowerCase(), { fullName: repo.fullName, ...(typeof repo.installationId === "number" ? { installationId: repo.installationId } : {}) });
-  for (const fullName of listConvergenceRepos(env)) {
-    const repo = repositoriesByKey.get(fullName.toLowerCase());
-    byKey.set(fullName.toLowerCase(), {
-      fullName,
-      ...(typeof repo?.installationId === "number" ? { installationId: repo.installationId } : {}),
-    });
-  }
+  // #10170: the repo-set assembly was duplicated five times; callers keep their own eligibility rules.
+  const repoCandidates = await resolveConfiguredRepoCandidates(env);
   // #3899: resolve every repo's settings + drain-state CONCURRENTLY (bounded), not one at a time. Each repo
   // costs resolveRepositorySettings's own 3 parallel round-trips plus a 4th getLatestRegatedAt read; awaiting
   // that serially per repo made this whole prefix scale linearly with repo count, before the per-repo dispatch
   // below (already parallel) even started. Reuses the same bounded worker-pool helper loadRepoFocusManifests
   // already relies on for the same "many small per-repo D1/KV reads" shape.
   const outcomes = await mapWithConcurrencyLimit(
-    [...byKey.values()],
+    repoCandidates,
     SWEEP_FANOUT_RESOLUTION_CONCURRENCY,
     async (repo): Promise<SweepFanoutResolutionOutcome> => {
       const repoFullName = repo.fullName;
@@ -1311,18 +1307,9 @@ async function fanOutRagIndexJobs(
   // case-insensitively (a repo can be both known AND configured). Each candidate is then filtered by whether RAG is
   // active for it (`features.rag` override → LOOPOVER_REVIEW_REPOS allowlist default) just below, so this widens
   // ELIGIBILITY only — the convergedFeatureActive gate below is what actually controls indexing spend.
-  const repositoriesByKey = new Map((await listRepositories(env)).map((repo) => [repo.fullName.toLowerCase(), repo]));
-  const byKey = new Map<string, { fullName: string; installationId?: number }>();
-  for (const repo of repositoriesByKey.values())
-    byKey.set(repo.fullName.toLowerCase(), { fullName: repo.fullName, ...(typeof repo.installationId === "number" ? { installationId: repo.installationId } : {}) });
-  for (const fullName of listConvergenceRepos(env)) {
-    const repo = repositoriesByKey.get(fullName.toLowerCase());
-    byKey.set(fullName.toLowerCase(), {
-      fullName,
-      ...(typeof repo?.installationId === "number" ? { installationId: repo.installationId } : {}),
-    });
-  }
-  const candidates = [...byKey.values()];
+  // #10170: the repo-set assembly was duplicated five times; callers keep their own eligibility rules.
+  const repoCandidates = await resolveConfiguredRepoCandidates(env);
+  const candidates = repoCandidates;
   const ragActiveByRepo = await Promise.all(
     candidates.map((repo) => convergedFeatureActive(env, repo.fullName, "rag")),
   );
@@ -1626,12 +1613,13 @@ export async function sweepRepoRegate(
     // Thread linked-issue authors + the open-reference check so the re-gate sweep applies the same
     // self-authored-linked-issue block AND stale-issue-link countermeasure the main webhook path applies —
     // without this a self-authored or stale-link-gaming PR re-gated by the sweep escapes both. (#self-authored-parity, #unlinked-issue-guardrail-followup)
-    const { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue } = await resolveLinkedIssueAdvisoryContext(
+    const { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue, supersededBy } = await resolveLinkedIssueAdvisoryContext(
       env,
       sweepInstallationId,
       repoFullName,
       pr.linkedIssues,
       settings,
+      pr,
     );
     // #9160: see resolveScopedLinkedIssueClaimedAt's own doc comment -- scopes pr's claim time to only the
     // issue(s) actually contested with an open sibling instead of pr's blended linkedIssueClaimedAt column.
@@ -1643,13 +1631,24 @@ export async function sweepRepoRegate(
       duplicateWinnerEnabled,
       linkedIssueAuthorLogins,
       confirmedNoOpenLinkedIssue,
+      supersededBy,
       copycatGateMode: settings.copycatGateMode,
       copycatGateMinScore: settings.copycatGateMinScore,
       scopedLinkedIssueClaimedAt,
     });
     const gate = evaluateGateCheck(
       advisory,
-      gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null, undefined, undefined, sweepCloseConfidenceOverride),
+      // #10158: the sweep must apply the SAME maintainer exemption the webhook path does, or the same PR
+      // gets one verdict live and a different one when the sweep re-gates it.
+      gateCheckPolicy(
+        withLinkedIssueMaintainerExemption(settings, await resolveLinkedIssueExemptionAuthor(env, sweepInstallationId, repoFullName, pr.authorLogin)),
+        null,
+        undefined,
+        pr.slopRisk ?? null,
+        undefined,
+        undefined,
+        sweepCloseConfidenceOverride,
+      ),
     );
     verdicts[String(pr.number)] = gate.conclusion;
     if (gate.conclusion === "failure" || gate.conclusion === "action_required")
@@ -1722,21 +1721,12 @@ export async function fanOutBacklogConvergenceSweepJobs(
     });
     return;
   }
-  const repositoriesByKey = new Map((await listRepositories(env)).map((repo) => [repo.fullName.toLowerCase(), repo]));
-  const byKey = new Map<string, { fullName: string; installationId?: number }>();
-  for (const repo of repositoriesByKey.values())
-    byKey.set(repo.fullName.toLowerCase(), { fullName: repo.fullName, ...(typeof repo.installationId === "number" ? { installationId: repo.installationId } : {}) });
-  for (const fullName of listConvergenceRepos(env)) {
-    const repo = repositoriesByKey.get(fullName.toLowerCase());
-    byKey.set(fullName.toLowerCase(), {
-      fullName,
-      ...(typeof repo?.installationId === "number" ? { installationId: repo.installationId } : {}),
-    });
-  }
+  // #10170: the repo-set assembly was duplicated five times; callers keep their own eligibility rules.
+  const repoCandidates = await resolveConfiguredRepoCandidates(env);
   // #4502 (ports #3899): resolve every repo's settings + drain-state CONCURRENTLY (bounded), not one at a time —
   // mirrors fanOutAgentRegateSweepJobs's own port of this fix, the same "many small per-repo D1/KV reads" shape.
   const outcomes = await mapWithConcurrencyLimit(
-    [...byKey.values()],
+    repoCandidates,
     SWEEP_FANOUT_RESOLUTION_CONCURRENCY,
     async (repo): Promise<SweepFanoutResolutionOutcome> => {
       const repoFullName = repo.fullName;
@@ -3984,6 +3974,19 @@ async function runAgentMaintenancePlanAndExecute(
       { reason: deriveReevaluationReason(deliveryId) },
       holdCause,
     );
+    // #10184: fold this verdict into the PR's stability state, at the one place every verdict passes through
+    // so no caller can bypass it -- the same reasoning persistDecisionRecord itself uses for its
+    // reevaluation check. Keyed on the head SHA, so a new commit starts clean without an explicit reset.
+    // Best effort: a failed write means the next pass sees no prior state and evaluates normally.
+    if (record.headSha) {
+      const stabilityKey = verdictStabilityKey(repoFullName, pr.number, record.headSha);
+      const priorStability = await readVerdictStability(env.SELFHOST_TRANSIENT_CACHE, stabilityKey);
+      await writeVerdictStability(
+        env.SELFHOST_TRANSIENT_CACHE,
+        stabilityKey,
+        recordVerdict(priorStability, { action: record.action, reasonCode: record.reasonCode, holdCause }, Date.now()),
+      );
+    }
     // #8838: persist the evaluation's own exact inputs beside the record (PRIVATE sibling, migration 0182)
     // so the replay harness can re-derive this decision bit-exactly. Best-effort, like the record itself;
     // the no-replay no-op (synthetic content-lane/bridge evaluations) lives inside the helper. Keyed to the
@@ -4380,10 +4383,10 @@ export async function reReviewStoredPullRequest(
     pr.number,
     pr.headSha,
   );
-  const [cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }] =
+  const [cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue, supersededBy }] =
     await Promise.all([
       listOtherOpenPullRequests(env, repoFullName, prNumber),
-      resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings),
+      resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings, pr),
     ]);
   // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the advisory
   // (and the disposition below) elect the cluster winner, so the real lowest-OPEN PR is never demoted+auto-closed.
@@ -4407,29 +4410,20 @@ export async function reReviewStoredPullRequest(
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
     duplicateWinnerEnabled: duplicateWinnerEnabledForPr,
     confirmedNoOpenLinkedIssue,
+    supersededBy,
     linkedIssueAuthorLogins,
     copycatGateMode: settings.copycatGateMode,
     copycatGateMinScore: settings.copycatGateMinScore,
     scopedLinkedIssueClaimedAt,
   });
   await persistAdvisory(env, advisory);
-  // #2537 follow-up (gate-flagged): the durable review cache's only invalidation path is markPullRequestReviewsInvalidated
-  // on a webhook (processors.ts). A "quiet" PR (no new pushes, slop evidence + manifest gate both off, no
-  // pre-merge check paths) never hits any of the three reasons below, so a DROPPED invalidation write could sit
-  // stale indefinitely even though this per-PR sweep unit visits every open PR on a bounded cadence.
-  // Short-circuit the extra read when another reason already forces the refresh.
-  const otherRefreshReasons =
-    shouldCollectSlopEvidence(settings) ||
-    settings.manifestPolicyGateMode !== "off" ||
-    (await shouldRefreshFilesForPreMergeChecks(env, repoFullName));
-  const reviewsCacheStale =
-    !otherRefreshReasons &&
-    !isReviewsCacheUpToDate(await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null));
-  if (otherRefreshReasons || reviewsCacheStale) {
-    await refreshPullRequestDetails(env, repoFullName, prNumber).catch(
-      () => undefined,
-    );
-  }
+  // #10174: the lock is claimed BEFORE the refresh below, not after. It answers "does another pass
+  // already own this PR" -- asking that only after paying for the refresh meant every contended pass did
+  // the work and threw it away. That was the single most frequent audit event on the Orb (1,180
+  // github_app.pr_public_surface_lock_contended in under two hours, ~2x the next event), and the refresh
+  // it wasted is a GitHub read whenever the detail-sync cache misses -- which is exactly what a busy PR
+  // does, and a busy PR is also what contends. Holding the lock across the refresh is already safe: #9467
+  // renews it while work runs, because this unit can span an AI review far longer than a refresh.
   // #9013: ONE per-PR actuation-lock claim spans the publish pass AND the maintenance pass right after it.
   // maybePublishPrPublicSurface used to run with no lock at all -- only the LATER maybeRunAgentMaintenance
   // claimed one -- so two concurrent passes for the SAME PR (this sweep re-review racing a webhook delivery,
@@ -4453,6 +4447,49 @@ export async function reReviewStoredPullRequest(
       metadata: { deliveryId, repoFullName },
     }).catch(() => undefined);
     throw new PrActuationLockContendedError(repoFullName, pr.number, "public-surface-publish");
+  }
+  // #10184: a PR whose answer has not changed does not need asking again yet. metagraphed#8886 produced 56
+  // identical `hold | missing_linked_issue` verdicts on ONE head SHA in 47 minutes; four such PRs made 66% of
+  // all decision records in a two-hour window, and that window exhausted the installation's REST quota.
+  //
+  // Placed AFTER the lock claim so the check itself is nearly free (one cache read on a pass that already
+  // owns the PR) and BEFORE the refresh, so a backed-off pass spends nothing. Returns rather than throws:
+  // this is not contention, there is no work to retry, and the state is already published and correct.
+  //
+  // Fails OPEN in every uncertain case -- no state, unreadable state, no cache -- see verdict-stability.ts.
+  // The delay is capped, so a stuck PR is still revisited; it just stops being asked 1.2x/minute.
+  if (pr.headSha) {
+    const stability = await readVerdictStability(env.SELFHOST_TRANSIENT_CACHE, verdictStabilityKey(repoFullName, pr.number, pr.headSha));
+    if (shouldSkipStableVerdict(stability, Date.now())) {
+      await recordAuditEvent(env, {
+        eventType: "github_app.review_skipped_stable_verdict",
+        actor: "loopover",
+        targetKey: `${repoFullName}#${pr.number}`,
+        outcome: "completed",
+        detail: `Verdict unchanged across ${stability?.repeats ?? 0} consecutive evaluations of this commit; backing off instead of re-deriving the same answer.`,
+        metadata: { deliveryId, repoFullName, repeats: stability?.repeats ?? 0 },
+      }).catch(() => undefined);
+      await releasePrActuationLock(env, repoFullName, pr.number, actuationLock.ownerToken).catch(() => undefined);
+      // false = "did not re-review", the same signal this function's other early bail uses.
+      return false;
+    }
+  }
+  // #2537 follow-up (gate-flagged): the durable review cache's only invalidation path is markPullRequestReviewsInvalidated
+  // on a webhook (processors.ts). A "quiet" PR (no new pushes, slop evidence + manifest gate both off, no
+  // pre-merge check paths) never hits any of the three reasons below, so a DROPPED invalidation write could sit
+  // stale indefinitely even though this per-PR sweep unit visits every open PR on a bounded cadence.
+  // Short-circuit the extra read when another reason already forces the refresh.
+  const otherRefreshReasons =
+    shouldCollectSlopEvidence(settings) ||
+    settings.manifestPolicyGateMode !== "off" ||
+    (await shouldRefreshFilesForPreMergeChecks(env, repoFullName));
+  const reviewsCacheStale =
+    !otherRefreshReasons &&
+    !isReviewsCacheUpToDate(await getPullRequestDetailSyncState(env, repoFullName, prNumber).catch(() => null));
+  if (otherRefreshReasons || reviewsCacheStale) {
+    await refreshPullRequestDetails(env, repoFullName, prNumber).catch(
+      () => undefined,
+    );
   }
   // #9467: this lock now spans the WHOLE publish -> AI review -> maintain unit (#9013 moved the claim here),
   // and the AI review alone can outlive the 600s TTL. Renew it while the work runs so a slow-but-healthy pass
@@ -5275,6 +5312,36 @@ async function maybeForceFreshRebase(
 // re-review a given PR at most once per this window. The re-review always re-fetches the LIVE CI, so the window
 // only bounds FREQUENCY, never correctness — a later out-of-window completion + the hourly sweep + the merge-time
 // re-check still catch the settled state.
+/**
+ * The author facts the linked-issue maintainer exemption reads (#10158), resolved identically at every gate
+ * evaluation so the same PR cannot get different verdicts from the webhook path and the re-gate sweep.
+ *
+ * Exactly the PROTECTED AUTHOR set used elsewhere in this file (`protectedAuthor`) -- owner, per-repo admin,
+ * or a protected automation author -- rather than a second definition of "maintainer". `isPerTenantAdmin`
+ * short-circuits to an env-allowlist lookup unless per-repo admin mode is on, so this is cheap on the common
+ * path; it fails CLOSED (not a maintainer) on any error, which degrades to today's behaviour rather than
+ * silently widening the exemption.
+ */
+async function resolveLinkedIssueExemptionAuthor(
+  env: Env,
+  installationId: number | null,
+  repoFullName: string,
+  // Nullable because the callers' PR records differ on this: some carry a guaranteed login, others a
+  // possibly-absent one. Normalised HERE rather than coerced at four call sites, so an unknown author can
+  // only ever resolve to "not a maintainer" -- coercing `null` to `""` at a call site would work today and
+  // silently become an owner match the day a repo is owned by the empty string's uppercase twin.
+  authorLogin: string | null | undefined,
+): Promise<LinkedIssueExemptionAuthor> {
+  const login = (authorLogin ?? "").trim();
+  if (login.length === 0) return { authorIsOwner: false, authorIsAdmin: false, authorIsAutomationBot: false };
+  const repoOwner = repoOwnerLoginFromFullName(repoFullName);
+  return {
+    authorIsOwner: repoOwner.length > 0 && login.toLowerCase() === repoOwner.toLowerCase(),
+    authorIsAdmin: await isPerTenantAdmin(env, installationId, repoFullName, login).catch(() => false),
+    authorIsAutomationBot: isProtectedAutomationAuthor(login, env),
+  };
+}
+
 const CI_COALESCE_WINDOW_SECONDS = 60;
 
 /**
@@ -7470,11 +7537,11 @@ async function handlePullRequestWebhookEvent(
     // column, so reading late would always see this pass's own bookkeeping write instead of the real prior
     // review pass's recorded visual_unrelated_issue_finding. Gated on `closed` (the only action
     // maybePostVisualFollowupComment ever fires for) so every other action skips this read entirely.
-    const [repo, cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue }, priorAdvisoryForVisualFollowup] =
+    const [repo, cachedOtherOpenPullRequests, { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue, supersededBy }, priorAdvisoryForVisualFollowup] =
       await Promise.all([
         getRepository(env, repoFullName),
         listOtherOpenPullRequests(env, repoFullName, pr.number),
-        resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings),
+        resolveLinkedIssueAdvisoryContext(env, installationId, repoFullName, pr.linkedIssues, settings, pr),
         payload.action === "closed" && installationId ? getLatestAdvisoryForPullRequest(env, repoFullName, pr.number) : Promise.resolve(null),
       ]);
     // #dup-winner / audit #15: drop any cached-open duplicate sibling already closed on GitHub before the
@@ -7499,6 +7566,7 @@ async function handlePullRequestWebhookEvent(
       requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
       duplicateWinnerEnabled: duplicateWinnerEnabledForPr,
       confirmedNoOpenLinkedIssue,
+      supersededBy,
       linkedIssueAuthorLogins,
       copycatGateMode: settings.copycatGateMode,
       copycatGateMinScore: settings.copycatGateMinScore,
@@ -8292,12 +8360,45 @@ async function resolveLinkedIssueAdvisoryContext(
   repoFullName: string,
   linkedIssues: number[],
   settings: Pick<RepositorySettings, "selfAuthoredLinkedIssueGateMode" | "linkedIssueGateMode">,
-): Promise<{ linkedIssueAuthorLogins: (string | null)[]; confirmedNoOpenLinkedIssue: boolean }> {
-  const [linkedIssueAuthorLogins, hasOpenReference] = await Promise.all([
+  // #10168: needed only to distinguish a superseded PR from one that cited a dead issue -- the check is
+  // "was this issue still open when THIS pull request was created".
+  pr: Pick<PullRequestRecord, "number" | "createdAt">,
+): Promise<{ linkedIssueAuthorLogins: (string | null)[]; confirmedNoOpenLinkedIssue: boolean; supersededBy: SupersededByRival | null }> {
+  const [linkedIssueAuthorLogins, reference] = await Promise.all([
     resolveLinkedIssueAuthorLogins(env, installationId, repoFullName, linkedIssues, settings.selfAuthoredLinkedIssueGateMode === "block"),
-    settings.linkedIssueGateMode === "block" ? resolveLinkedIssueHasOpenReference({ env, repoFullName, linkedIssues, installationId }) : Promise.resolve(true),
+    settings.linkedIssueGateMode === "block"
+      ? resolveLinkedIssueHasOpenReference({ env, repoFullName, linkedIssues, installationId })
+      : Promise.resolve({ hasOpenReference: true, closures: [] }),
   ]);
-  return { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue: !hasOpenReference };
+  const confirmedNoOpenLinkedIssue = !reference.hasOpenReference;
+  // Only a PR that ALREADY reads as having no open linked issue can be superseded -- this splits that one
+  // verdict in two, it never creates a new one. Gated OFF by default (#10168): recognising supersession
+  // closes the PR. Best effort: a failed lookup yields null, which keeps today's `missing_linked_issue`.
+  const supersededBy =
+    confirmedNoOpenLinkedIssue && isSupersededCloseEnabledGlobally(env)
+      ? await resolveSupersededRival(env, repoFullName, pr, reference.closures).catch(() => null)
+      : null;
+  return { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue, supersededBy };
+}
+
+/**
+ * #10168: find the merged rival that closed this PR's linked issue, if there is one.
+ *
+ * The candidate window runs from this PR's own creation to the latest observed issue close plus the
+ * resolver's tolerance -- the smallest range that can still contain a qualifying merge, so the DB read stays
+ * bounded no matter how long the PR has been sitting. Returns null when the PR has no synced `createdAt` or
+ * no conclusively-read closed issue, because neither half of the evidence can be established without them.
+ */
+async function resolveSupersededRival(
+  env: Env,
+  repoFullName: string,
+  pr: Pick<PullRequestRecord, "number" | "createdAt">,
+  closures: LinkedIssueClosure[],
+): Promise<SupersededByRival | null> {
+  const window = supersededSearchWindow(pr.createdAt, closures);
+  if (window === null) return null;
+  const mergedRivals = await listMergedPullRequestsInWindow(env, repoFullName, window.sinceIso, window.untilIso);
+  return resolveSupersession({ prNumber: pr.number, prCreatedAt: pr.createdAt, closures, mergedRivals });
 }
 
 export async function shouldRefreshFilesForPreMergeChecks(
@@ -9945,7 +10046,7 @@ async function logTypeLabelSkip(env: Env, repoFullName: string, pullNumber: numb
  *  (browserless down, timeout, a GitHub hiccup) -- neither means "this PR genuinely has no visual evidence",
  *  so neither should let the screenshotTableGate treat it that way. Persists visualCaptureRetryPendingSha for
  *  the current head ONLY when a retry was actually SENT (budget remaining, and the enqueue itself succeeded --
- *  #9876) -- once MAX_PREVIEW_POLL_ATTEMPTS is reached, the marker is cleared so the gate falls through to its
+ *  #9876) -- once MAX_CAPTURE_RETRY_ATTEMPTS is reached, the marker is cleared so the gate falls through to its
  *  normal (accurate) evaluation on this final attempt rather than holding the PR open forever. Best-effort:
  *  either write failing only means this ONE recovery chance is silently missed, never a crash.
  *
@@ -9963,7 +10064,17 @@ async function scheduleVisualCaptureRetry(
     previewPollAttempt: number;
   },
 ): Promise<void> {
-  if (args.previewPollAttempt >= MAX_PREVIEW_POLL_ATTEMPTS) {
+  // #10061: the exhaustion decision reads a durable, headSha-keyed counter (captureRetryAttemptCount) that
+  // THIS function itself increments below on every retry it actually enqueues -- not args.previewPollAttempt,
+  // the recapture-preview job chain's own payload field. Every OTHER trigger that reaches this function
+  // (CI-completion, deployment_status, the maintenance sweep) calls it without threading that field, so it
+  // always read back 0 and never bounded anything for them (the bug this fixes). The counter lives under its
+  // OWN R2 namespace in preview-poll-budget.ts, separate from buildCapture's own previewPending budget, so
+  // neither double-charges the other.
+  /* v8 ignore next -- a recapture-preview job is only ever minted for a PR that had a head SHA, so the falsy
+     arm is defensive; the clear/mark guards below carry the identical guard for the same reason. */
+  const captureRetryAttempts = args.pr.headSha ? await captureRetryAttemptCount(env, args.pr.headSha) : 0;
+  if (captureRetryAttempts >= MAX_CAPTURE_RETRY_ATTEMPTS) {
     // #9462: the budget is spent, so the marker the PREVIOUS attempt wrote must be cleared here. Returning
     // without clearing only skips re-writing it -- it left `visualCaptureRetryPendingSha === headSha` standing
     // forever (the sole other clear needs a successful capture, which by definition never came), which silently
@@ -10015,6 +10126,10 @@ async function scheduleVisualCaptureRetry(
     },
   );
   if (enqueued && args.pr.headSha) {
+    // #10061: increment the durable capture-retry budget for exactly the retries we actually sent, mirroring
+    // the mark write below -- best-effort in the same direction (a failed increment just means this attempt
+    // doesn't count toward the cap, degrading toward "keep trying" rather than "stuck").
+    await recordCaptureRetryAttempt(env, args.pr.headSha);
     await markPullRequestVisualCaptureRetryPending(env, args.repoFullName, args.pr.number, args.pr.headSha).catch((error) => {
       console.log(
         JSON.stringify({
@@ -12200,7 +12315,12 @@ async function maybePublishPrPublicSurface(
       guardrailMatches: guardrailPathMatches(guardrailChangedPaths, hardGuardrailGlobs),
     };
     const gatePolicy = gateCheckPolicy(
-      settings,
+      // #10158: the maintainer linked-issue exemption is applied to `settings` here rather than passed as an
+      // argument, because BOTH halves that must agree read this object -- `requireLinkedIssue` (does the
+      // finding get produced) and `linkedIssueGateMode` (does it block). Clamping once upstream makes them
+      // unable to disagree; gateCheckPolicy already takes seven positional arguments and does not need an
+      // eighth. Same call in the sweep and re-gate paths, so a PR cannot be judged differently by each.
+      withLinkedIssueMaintainerExemption(settings, await resolveLinkedIssueExemptionAuthor(env, installationId, repoFullName, pr.authorLogin)),
       readiness.total,
       confirmedContributor,
       slopRisk,
@@ -13839,7 +13959,7 @@ async function maybeProcessResolveCommand(env: Env, deliveryId: string, payload:
   if (!findingRef.ok) { await recordAuditEvent(env, { eventType: "github_app.finding_resolved_skipped", actor: req.actor, targetKey, outcome: "completed", detail: findingRef.reason, metadata: { deliveryId, repoFullName: req.repoFullName, reason: findingRef.reason } }); await recordGithubProductUsage(env, "finding_resolved_skipped", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "skipped", metadata: { reason: findingRef.reason } }); return true; }
   const { advisory } = await buildAuthorizedPrActionAdvisory(env, req.repoFullName, pr, settings);
   await appendPublishedAiReviewFindingsForResolve(env, req.repoFullName, pr, settings.aiReviewMode, advisory);
-  const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null, undefined, undefined, await resolveAutomaticCloseConfidence(env, req.repoFullName, await getAiReviewCloseConfidenceOverride(env, req.repoFullName))));
+  const gate = evaluateGateCheck(advisory, gateCheckPolicy(withLinkedIssueMaintainerExemption(settings, await resolveLinkedIssueExemptionAuthor(env, req.installationId ?? null, req.repoFullName, pr.authorLogin)), null, undefined, pr.slopRisk ?? null, undefined, undefined, await resolveAutomaticCloseConfidence(env, req.repoFullName, await getAiReviewCloseConfidenceOverride(env, req.repoFullName))));
   const selection = selectWarningsForResolve(gate.warnings, findingRef);
   if (selection.reason === "finding_not_found") { await recordAuditEvent(env, { eventType: "github_app.finding_resolved_skipped", actor: req.actor, targetKey, outcome: "completed", detail: selection.reason, metadata: { deliveryId, repoFullName: req.repoFullName, reason: selection.reason } }); await recordGithubProductUsage(env, "finding_resolved_skipped", { actor: req.actor, repoFullName: req.repoFullName, targetKey, outcome: "skipped", metadata: { reason: selection.reason } }); return true; }
   const mode = resolveAgentActionMode({ globalPaused: isGlobalAgentPause(env) || (await isGlobalAgentFrozen(env)), instanceMode: forcedSelfhostMode(env), agentPaused: settings.agentPaused, agentDryRun: settings.agentDryRun });
@@ -14086,7 +14206,7 @@ async function maybeProcessExplainCommand(env: Env, deliveryId: string, payload:
   }
   const { advisory } = await buildAuthorizedPrActionAdvisory(env, req.repoFullName, pr, settings);
   await appendPublishedAiReviewFindingsForResolve(env, req.repoFullName, pr, settings.aiReviewMode, advisory);
-  const gate = evaluateGateCheck(advisory, gateCheckPolicy(settings, null, undefined, pr.slopRisk ?? null, undefined, undefined, await resolveAutomaticCloseConfidence(env, req.repoFullName, await getAiReviewCloseConfidenceOverride(env, req.repoFullName))));
+  const gate = evaluateGateCheck(advisory, gateCheckPolicy(withLinkedIssueMaintainerExemption(settings, await resolveLinkedIssueExemptionAuthor(env, req.installationId ?? null, req.repoFullName, pr.authorLogin)), null, undefined, pr.slopRisk ?? null, undefined, undefined, await resolveAutomaticCloseConfidence(env, req.repoFullName, await getAiReviewCloseConfidenceOverride(env, req.repoFullName))));
   const selection = selectWarningsForResolve(gate.warnings, findingRef);
   if (selection.reason === "finding_not_found") {
     const notFound = sanitizePublicComment([AGENT_COMMAND_COMMENT_MARKER, "", "> [!NOTE]", `> **No review finding \`${findingRef.findingCode}\` on this PR**`, "> That id is not among this PR's current review findings — re-run `@loopover explain <finding-id>` with an id from the review summary.", "", "---", loopoverFooter(env)].join("\n"));
@@ -15131,12 +15251,13 @@ export async function buildAuthorizedPrActionAdvisory(
   // Mirror the main webhook path: thread linked-issue authors + the open-reference check so an authorized PR
   // action (gate-override / panel retrigger) honors the same self-authored-linked-issue block AND stale-
   // issue-link countermeasure. installationId comes from the repo record. (#self-authored-parity, #unlinked-issue-guardrail-followup)
-  const { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue } = await resolveLinkedIssueAdvisoryContext(
+  const { linkedIssueAuthorLogins, confirmedNoOpenLinkedIssue, supersededBy } = await resolveLinkedIssueAdvisoryContext(
     env,
     repo?.installationId ?? null,
     repoFullName,
     pr.linkedIssues,
     settings,
+    pr,
   );
   const duplicateWinnerEnabledForPr = resolveDuplicateWinnerEnabled(isDuplicateWinnerEnabledGlobally(env), settings.duplicateWinnerMode);
   // #9160: see resolveScopedLinkedIssueClaimedAt's own doc comment -- scopes pr's claim time to only the
@@ -15150,6 +15271,7 @@ export async function buildAuthorizedPrActionAdvisory(
     requireLinkedIssue: shouldCollectLinkedIssueEvidence(settings),
     duplicateWinnerEnabled: duplicateWinnerEnabledForPr,
     confirmedNoOpenLinkedIssue,
+    supersededBy,
     linkedIssueAuthorLogins,
     copycatGateMode: settings.copycatGateMode,
     copycatGateMinScore: settings.copycatGateMinScore,

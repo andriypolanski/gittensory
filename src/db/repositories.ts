@@ -2,7 +2,7 @@
 // (dist/index.js re-exporting calibration/advisory/policy modules) measured ~420ms of cold import
 // under vitest — a tax paid by every test file that transitively touches repositories (#test-import-cost).
 import { parsePullRequestTargetKey } from "@loopover/engine/parse-pull-request-target-key";
-import { and, asc, desc, eq, gte, inArray, isNotNull, lt, not, or, sql, type SQL } from "drizzle-orm";
+import { and, asc, desc, eq, gte, inArray, isNotNull, lt, lte, not, or, sql, type SQL } from "drizzle-orm";
 import { getDb } from "./client";
 import {
   activeReviewTracking,
@@ -5116,6 +5116,42 @@ export async function listOtherOpenPullRequests(env: Env, fullName: string, numb
   return rows.map(toPullRequestRecordFromRow);
 }
 
+/**
+ * Merged pull requests in this repo whose merge landed inside `[sinceIso, untilIso]` (#10168) — the candidate
+ * rivals for a supersession check. Only the three fields that decision needs are selected.
+ *
+ * Reads `pull_requests`, deliberately NOT the purpose-shaped `recent_merged_pull_requests` table: that one is
+ * no longer written (its newest row on the Orb predates this by weeks), so a rival that merged minutes ago is
+ * simply absent from it, and a supersession check reading it would silently never fire.
+ *
+ * `merged_at` holds GitHub's Z-normalised ISO-8601, so the window comparison is a lexicographic string range
+ * over the stored text — the same shape every other timestamp filter in this file uses.
+ */
+export async function listMergedPullRequestsInWindow(
+  env: Env,
+  fullName: string,
+  sinceIso: string,
+  untilIso: string,
+): Promise<{ number: number; mergedAt: string | null; linkedIssues: number[] }[]> {
+  const db = getDb(env.DB);
+  const rows = await db
+    .select({ number: pullRequests.number, mergedAt: pullRequests.mergedAt, linkedIssuesJson: pullRequests.linkedIssuesJson })
+    .from(pullRequests)
+    .where(
+      and(
+        eq(pullRequests.repoFullName, fullName),
+        isNotNull(pullRequests.mergedAt),
+        gte(pullRequests.mergedAt, sinceIso),
+        lte(pullRequests.mergedAt, untilIso),
+      ),
+    )
+    // Ascending merge time, so the cap keeps the EARLIEST merges in the window — the supersession resolver
+    // elects the earliest qualifying rival, so dropping those would mis-name the cause.
+    .orderBy(asc(pullRequests.mergedAt))
+    .limit(100);
+  return rows.map((row) => ({ number: row.number, mergedAt: row.mergedAt, linkedIssues: parseJson<number[]>(row.linkedIssuesJson, []) }));
+}
+
 // #9125: `authorGithubId` is optional and ADDITIVE -- when the caller has it, a sibling PR matches on the
 // immutable id OR the (renameable) login, so a contributor who renamed between two PRs still gets counted
 // against their own cap. Omit it and this behaves exactly as the login-only match always did.
@@ -5406,17 +5442,6 @@ export async function countRecentMergedPullRequests(env: Env, fullName: string):
   const [row] = await db.select({ count: sql<number>`count(*)` }).from(recentMergedPullRequests).where(eq(recentMergedPullRequests.repoFullName, fullName));
   /* v8 ignore next -- SQL aggregate count always returns one row; fallback protects D1 driver anomalies. */
   return Number(row?.count ?? 0);
-}
-
-export async function listContributorRecentMergedPullRequests(env: Env, login: string): Promise<RecentMergedPullRequestRecord[]> {
-  const db = getDb(env.DB);
-  const rows = await db
-    .select()
-    .from(recentMergedPullRequests)
-    .where(loginMatches(recentMergedPullRequests.authorLogin, login))
-    .orderBy(desc(recentMergedPullRequests.mergedAt))
-    .limit(1000);
-  return rows.map(toRecentMergedPullRequestRecord);
 }
 
 export async function upsertContributor(env: Env, contributor: ContributorRecord): Promise<void> {
